@@ -1,0 +1,25 @@
+# 本地账务数据与导出
+/data/
+/exports/
+*.db
+*.db-*
+*.sqlite
+*.sqlite-*
+*.sqlite3
+*.sqlite3-*
+
+# 本地配置与凭据
+.env
+.env.*
+!.env.example
+mise.local.toml
+mise.*.local.toml
+
+# 构建与测试产物
+/bin/
+/dist/
+/coverage/
+*.test
+
+# 系统文件
+.DS_Store

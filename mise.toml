@@ -1,0 +1,53 @@
+[tools]
+go = "1.26.4"
+actionlint = "1.7.12"
+
+[tasks.status]
+description = "查看 Git 仓库状态"
+run = "git status --short --branch"
+
+[tasks.deps]
+description = "整理 Go 依赖"
+run = "go mod tidy"
+
+[tasks.fmt]
+description = "格式化 Go 代码"
+run = "gofmt -w cmd internal scripts"
+
+[tasks.test]
+description = "运行协议、会话、CLI、更新与版本构建测试"
+run = "go test -race -timeout 60s ./..."
+
+[tasks.vet]
+description = "运行 Go 静态检查"
+run = "go vet ./..."
+
+[tasks.build]
+description = "构建 LedgerLens"
+run = "go run ./scripts/build local"
+
+[tasks.package]
+description = "本地打包六个平台，未处于干净正式版 Tag 时标记为 dev"
+run = "go run ./scripts/build package"
+
+[tasks."release:validate"]
+description = "校验 RELEASE_TAG 为指向 HEAD 的正式版 Tag，并检查工作区干净"
+run = "go run ./scripts/build validate"
+
+[tasks.release]
+description = "按 RELEASE_TAG 构建六个平台的正式版压缩包与 SHA256SUMS"
+run = "go run ./scripts/build release"
+
+[tasks."workflows:lint"]
+description = "校验 GitHub Actions 工作流"
+run = "actionlint"
+
+[tasks.check]
+description = "运行测试、静态检查、工作流校验与构建"
+depends = ["test", "vet", "workflows:lint", "build"]
+
+[tasks.cli]
+description = "运行 CLI；参数置于 -- 之后"
+quiet = true
+depends = ["build"]
+run = "./bin/ledgerlens"

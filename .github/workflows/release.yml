@@ -1,0 +1,65 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@v4
+      - name: Validate stable tag and commit
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: mise run release:validate
+
+  checks:
+    needs: validate
+    uses: ./.github/workflows/ci.yml
+
+  release:
+    needs: checks
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: jdx/mise-action@v4
+      - name: Build and package all platforms
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: mise run release
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: LedgerLens ${{ github.ref_name }}
+          prerelease: false
+          make_latest: legacy
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: |
+            dist/ledgerlens_*.tar.gz
+            dist/ledgerlens_*.zip
+            dist/SHA256SUMS
+          body: |
+            下载与你的系统和架构对应的压缩包，解压后运行 ledgerlens（Windows 为 ledgerlens.exe）。
+            macOS：darwin；Linux：linux；Windows：windows。amd64 表示 Intel/AMD x64，arm64 表示 ARM64 / Apple Silicon。
+            压缩包包含 CLI、README、MIT 许可证和 LedgerLens Agent Skill。SHA256SUMS 可用于校验下载文件。

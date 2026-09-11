@@ -1,0 +1,4 @@
+interface:
+  display_name: "账镜 · LedgerLens"
+  short_description: "通过钱迹只读 CLI 查询账单、同步本地缓存并分析个人收支"
+  default_prompt: "使用 $ledgerlens 查询我的钱迹账单，按需要刷新缓存并汇总收支。"
