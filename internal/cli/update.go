@@ -12,6 +12,7 @@ const automaticUpdateTimeout = 2 * time.Second
 
 type updateChecker interface {
 	Check(context.Context, string) (update.Result, error)
+	CheckAutomatic(context.Context, string) (update.Result, error)
 	Cached(string) update.Result
 }
 
@@ -25,7 +26,7 @@ func startUpdateCheck(ctx context.Context, checker updateChecker, current string
 	done := make(chan *update.Notice, 1)
 	go func() {
 		// A failed request can still return a previously confirmed newer release.
-		result, _ := checker.Check(checkCtx, current)
+		result, _ := checker.CheckAutomatic(checkCtx, current)
 		done <- result.Notice()
 	}()
 	return func() *update.Notice {

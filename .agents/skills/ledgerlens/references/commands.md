@@ -22,14 +22,18 @@ ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
 | 命令 | 行为与输出 |
 | --- | --- |
 | `version` / `--version` | 返回 `data.version`、`commit`、`build_date`；不打开账务数据库。 |
-| `update check` | 主动请求 GitHub 最新公开正式版，遵循 `--timeout`；返回 `current_version`、`latest_version`、`update_available`、`release_url`、`checked_at`、`source`。不登录、不读取账务数据库。 |
+| `update check` | 主动请求 GitHub 最新公开正式版，不受缓存期限和自动退避间隔限制，遵循 `--timeout`；返回 `current_version`、`latest_version`、`update_available`、`release_url`、`checked_at`、`source`。不登录、不读取账务数据库。 |
 | `--no-update-check` | 关闭本次自动检查及提示；也可设置 `LEDGERLENS_NO_UPDATE_CHECK=1`。不影响显式执行 `update check`。 |
 
-正式版每次调用（含帮助、版本及错误命令）都会并行请求 GitHub，未升级时每次继续提示，不缓存“已读”状态。自动请求最多 2 秒，超时、限流及网络错误不改变原命令结果；已有更新缓存时继续提示，`source=cache` 和 `checked_at` 明确说明来源与时间。主动检查失败会报错，不将缓存冒充在线结果。
+正式版每次调用（含帮助、版本及错误命令）都会读取更新状态；成功检查后 24 小时内直接复用缓存，到期后的下一次调用才并行请求 GitHub。自动请求最多 2 秒，失败后至少间隔 1 小时再尝试；遇到 `Retry-After` 或额度耗尽的 `X-RateLimit-Reset` 时，以服务器指定的更晚时间为准。自动检查由调用触发，不启动定时后台服务。
+
+已有新版本时每次继续提示，不缓存“已读”状态；升级后重新比较当前版本，旧提示自动消失。`source=cache` 只表示复用本地记录，`checked_at` 始终是上次成功在线确认时间，不表示本次联网失败。主动检查始终请求远端，成功会重新计算 24 小时有效期，失败会报错并更新自动退避时间，不将缓存冒充在线结果。
+
+共享缓存目录的并发调用只允许一个到期自动检查执行 HTTP，其他调用立即使用已有缓存。请求开始前会记录重试间隔，进程中断也不会让下一次调用立刻重试；文件锁随进程退出自动释放。缓存无法写入时跳过自动联网，账务命令正常执行，手动 `update check` 仍可联网。
 
 比较按主版本、次版本、补丁版本的数值顺序执行，例如 `1.10.0 > 1.9.0`。仅接受 `vX.Y.Z` 正式版，拒绝草稿及预发布。`dev` 不自动检查；主动检查可获取最新 Release，但 `update_available=null`，不能据此声称当前开发源码落后。正式版 `update_available=false` 表示远端版本不高于当前版本，不会建议降级。
 
-更新检查不发送钱迹账号、Token 或账务内容。缓存仅保存版本 Tag 和检查时间，独立位于系统用户缓存目录的 `ledger-lens/update.json`（macOS 为 `~/Library/Caches/ledger-lens/update.json`），缓存不可写不影响命令。更新功能只检查和提示，不自动下载、替换或重启程序。
+更新检查不发送钱迹账号、Token 或账务内容。缓存仅保存版本 Tag、成功检查时间与最早重试时间，独立位于系统用户缓存目录的 `ledger-lens/update.json`（macOS 为 `~/Library/Caches/ledger-lens/update.json`），相邻的 `update.json.lock` 用于进程互斥。兼容旧版只含 Tag 和检查时间的缓存。更新功能只检查和提示，不自动下载、替换或重启程序。
 
 ## 认证与缓存
 
