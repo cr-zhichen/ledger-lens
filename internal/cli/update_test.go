@@ -120,8 +120,15 @@ func TestAutomaticTimeoutStillReportsPreviouslyKnownUpdate(t *testing.T) {
 	hang.Store(true)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
+	automaticDone := make(chan struct{})
+	checker := automaticCompletionChecker{updateChecker: client, done: automaticDone}
 	var out, stderr bytes.Buffer
-	code := run(ctx, []string{"version"}, strings.NewReader(""), &out, &stderr, version.Info{Version: "1.0.0"}, client)
+	code := run(ctx, []string{"version"}, strings.NewReader(""), &out, &stderr, version.Info{Version: "1.0.0"}, checker)
+	select {
+	case <-automaticDone:
+	case <-time.After(time.Second):
+		t.Fatal("automatic update check did not stop after its context expired")
+	}
 	if code != 0 || !json.Valid(out.Bytes()) || !json.Valid(stderr.Bytes()) || !strings.Contains(stderr.String(), `"source":"cache"`) {
 		t.Fatalf("timeout lost cached notice or changed command: %d / %s", code, stderr.String())
 	}
@@ -175,6 +182,16 @@ func (f checkerFunc) Check(ctx context.Context, current string) (update.Result, 
 
 func (f checkerFunc) CheckAutomatic(ctx context.Context, current string) (update.Result, error) {
 	return f(ctx, current)
+}
+
+type automaticCompletionChecker struct {
+	updateChecker
+	done chan struct{}
+}
+
+func (c automaticCompletionChecker) CheckAutomatic(ctx context.Context, current string) (update.Result, error) {
+	defer close(c.done)
+	return c.updateChecker.CheckAutomatic(ctx, current)
 }
 
 type signalingWriter struct {
