@@ -26,27 +26,28 @@ func TestEveryInvocationReportsUpdateWithoutBreakingOutput(t *testing.T) {
 		io.WriteString(w, `{"tag_name":"v1.10.0"}`)
 	}))
 	defer server.Close()
-	client := &update.Client{HTTP: server.Client(), URL: server.URL}
+	client := &update.Client{HTTP: server.Client(), URL: server.URL, CachePath: filepath.Join(t.TempDir(), "update.json")}
 	db := filepath.Join(t.TempDir(), "must-not-be-created.sqlite")
 	for _, tt := range []struct {
-		args []string
-		code int
-		help bool
+		args     []string
+		code     int
+		help     bool
+		requests int32
 	}{
-		{[]string{"version"}, 0, false},
-		{[]string{"version"}, 0, false}, // The same update is reported again on the next invocation.
-		{[]string{"--version"}, 0, false},
-		{[]string{"update", "check"}, 0, false},
-		{[]string{"--help"}, 0, true},
-		{nil, 0, true},
-		{[]string{"update", "check", "--help"}, 0, true},
-		{[]string{"unknown"}, 2, false},
-		{[]string{"version", "--invalid"}, 2, false},
+		{[]string{"version"}, 0, false, 1},
+		{[]string{"version"}, 0, false, 0}, // Repeat the notice without another HTTP request.
+		{[]string{"--version"}, 0, false, 0},
+		{[]string{"update", "check"}, 0, false, 1},
+		{[]string{"--help"}, 0, true, 0},
+		{nil, 0, true, 0},
+		{[]string{"update", "check", "--help"}, 0, true, 0},
+		{[]string{"unknown"}, 2, false, 0},
+		{[]string{"version", "--invalid"}, 2, false, 0},
 	} {
 		var out, stderr bytes.Buffer
 		before := calls.Load()
 		code := run(context.Background(), append([]string{"--db", db}, tt.args...), strings.NewReader(""), &out, &stderr, version.Info{Version: "1.9.0"}, client)
-		if code != tt.code || calls.Load() != before+1 {
+		if code != tt.code || calls.Load() != before+tt.requests {
 			t.Fatalf("%v: exit %d, check count %d", tt.args, code, calls.Load()-before)
 		}
 		var diagnostic struct {
@@ -55,6 +56,9 @@ func TestEveryInvocationReportsUpdateWithoutBreakingOutput(t *testing.T) {
 		}
 		if err := json.Unmarshal(stderr.Bytes(), &diagnostic); err != nil || diagnostic.Notice == nil || diagnostic.Notice.Code != "UPDATE_AVAILABLE" {
 			t.Fatalf("%v: missing notice or invalid stderr JSON: %s", tt.args, stderr.String())
+		}
+		if strings.Contains(diagnostic.Notice.Message, "本次在线检查未成功") {
+			t.Fatal("normal cache reuse was mislabeled as a network failure")
 		}
 		if code != 0 {
 			if out.Len() != 0 || diagnostic.Error == nil || diagnostic.Error.Code != "INVALID_ARGUMENT" {
@@ -77,7 +81,7 @@ func TestAutomaticFailuresAreSilentButExplicitCheckFails(t *testing.T) {
 		w.WriteHeader(http.StatusTooManyRequests)
 	}))
 	defer server.Close()
-	client := &update.Client{HTTP: server.Client(), URL: server.URL}
+	client := &update.Client{HTTP: server.Client(), URL: server.URL, CachePath: filepath.Join(t.TempDir(), "update.json")}
 	for _, args := range [][]string{{"version"}, {"update", "check"}} {
 		var out, stderr bytes.Buffer
 		code := run(context.Background(), args, strings.NewReader(""), &out, &stderr, version.Info{Version: "1.0.0"}, client)
@@ -104,6 +108,13 @@ func TestAutomaticTimeoutStillReportsPreviouslyKnownUpdate(t *testing.T) {
 	defer server.Close()
 	client := &update.Client{HTTP: server.Client(), URL: server.URL, CachePath: filepath.Join(t.TempDir(), "update.json")}
 	if _, err := client.Check(context.Background(), "1.0.0"); err != nil {
+		t.Fatal(err)
+	}
+	stale, err := json.Marshal(map[string]any{"tag": "v2.0.0", "checked_at": time.Now().Add(-25 * time.Hour)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(client.CachePath, stale, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	hang.Store(true)
@@ -159,6 +170,10 @@ func (f checkerFunc) Cached(current string) update.Result {
 }
 
 func (f checkerFunc) Check(ctx context.Context, current string) (update.Result, error) {
+	return f(ctx, current)
+}
+
+func (f checkerFunc) CheckAutomatic(ctx context.Context, current string) (update.Result, error) {
 	return f(ctx, current)
 }
 

@@ -24,7 +24,7 @@ mise run build
 
 也可使用 `mise run cli -- <命令及参数>`。自动解析输出时优先直接调用二进制，分别读取 stdout、stderr 和退出码。完整参数与错误处理见 [命令参考](references/commands.md)。不要假定存在 `stats`、`export` 或 `--json`；账单统计由调用方完成，正常输出已经是 JSON。
 
-正式版每次调用都会自动检查 GitHub 更新；stderr 中的 `notice.code=UPDATE_AVAILABLE` 是提示，不是失败。命令失败时 `notice` 与 `error` 位于同一个 JSON 对象中，仍按 `error.code` 决策。向用户简要转述发现的更新及下载链接，不自行下载安装。更新请求失败不影响账务命令；`notice.source=cache` 表示本次在线检查失败，应注明这是 `checked_at` 时确认的版本。
+正式版成功检查后 24 小时内复用更新缓存，到期后的调用才会自动请求 GitHub；失败后至少间隔 1 小时再尝试，限流时等待服务器指定的更晚时间。已发现的新版本每次调用仍会提示。stderr 中的 `notice.code=UPDATE_AVAILABLE` 是提示，不是失败；命令失败时 `notice` 与 `error` 位于同一个 JSON 对象中，仍按 `error.code` 决策。向用户简要转述更新及下载链接，不自行下载安装。`notice.source=cache` 表示使用本地记录，应注明 `checked_at` 是上次成功在线检查时间，不能据此判断本次联网失败。
 
 用户要求完全离线时添加 `--no-update-check`，或设置 `LEDGERLENS_NO_UPDATE_CHECK=1`。`update check` 是主动联网命令，即使关闭自动检查仍会请求 GitHub，离线任务不要执行它。`version` / `--version` 和 `update check` 均不打开账务数据库；`dev` 构建只支持主动查询，`update_available=null` 表示当前开发版本无法比较。
 

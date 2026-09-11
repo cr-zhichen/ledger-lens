@@ -56,7 +56,9 @@ const help = `账镜 · LedgerLens
 日期按 Asia/Shanghai 解释，since 包含当日，until 不包含当日。
 bills pull 仅返回一页变更，不更新缓存。使用 sync 获取完整缓存。
 成功 JSON 写 stdout，错误 JSON 写 stderr；失败返回非零退出码。
-正式版每次调用自动检查更新（最多 2 秒），提示写入 stderr 的 notice 字段。
+正式版成功检查后 24 小时内复用缓存；失败至少等待 1 小时，限流遵循服务器要求。
+已发现的更新每次提示，写入 stderr 的 notice 字段；到期联网检查最多 2 秒。
+update check 不受自动检查间隔限制，主动联网检查。
 网络异常不影响原命令；LEDGERLENS_NO_UPDATE_CHECK=1 可关闭自动检查。
 `
 
