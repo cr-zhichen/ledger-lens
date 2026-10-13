@@ -1,12 +1,13 @@
 # 账镜 · LedgerLens
 
-面向 AI Agent 的钱迹只读 CLI。把账单缓存在本地，方便查询花销、分析收支，无需部署服务。
+账镜是面向 AI Agent 的钱迹 CLI，支持查询收支及新增、修改、删除账单。账单缓存在本地，支持离线查询，无需部署服务。
 
 - 读取账单、账本、资产、分类、标签和预算等信息。
+- 批量新增、修改普通收支和待报销支出，删除账单。
 - 首次全量同步，后续增量更新，支持离线查询。
 - 输出 JSON，内置 Agent Skill，方便自动调用与汇总。
 
-当前版本仅支持远端登录与查询，收支统计由 Agent 或调用方完成。
+收支统计由 Agent 或调用方完成。
 
 ## 快速开始
 
@@ -51,6 +52,12 @@ mise run build
 
 账单查询默认读取本地缓存，加 `--fresh` 可先同步再查询。日期按北京时间解释，包含起始日、不包含结束日。列表默认每页 100 条，使用 `--limit` 和 `--offset` 分页；汇总前需读完全部结果。
 
+## 账单管理
+
+使用 `bills create`、`bills update`、`bills delete` 管理钱迹账单。输入格式、字段及示例见[账单写入](.agents/skills/ledgerlens/references/commands.md#账单写入)。
+
+> 写入命令会直接修改钱迹中的账单，删除无法由本 CLI 撤销。
+
 ## 交给 Agent 使用
 
 项目内置 [LedgerLens Skill](.agents/skills/ledgerlens/SKILL.md)，支持该 Skill 的 Agent 可以这样调用：
@@ -58,6 +65,7 @@ mise run build
 ```text
 $ledgerlens 查询我近一周的花销，按分类汇总。
 $ledgerlens 只使用本地缓存，查询我上个月的收支。
+$ledgerlens 记一笔今天的午餐支出 25 元。
 ```
 
 其他 Agent 可从 [AGENTS.md](AGENTS.md) 了解调用方式。完整命令、参数和常见问题见 [使用参考](.agents/skills/ledgerlens/references/commands.md)。

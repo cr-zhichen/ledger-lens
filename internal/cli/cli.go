@@ -38,6 +38,11 @@ const help = `账镜 · LedgerLens
                  [--limit 100] [--offset 0] [--fresh]
   bills get      --id ID [--fresh]
 
+账单写入（会修改钱迹中的账单）：
+  bills create   --input-stdin             批量新增普通收支或待报销支出
+  bills update   --input-stdin             批量修改普通收支或待报销支出
+  bills delete   --input-stdin             批量删除账单
+
 远端只读接口：
   books list     [--include-hidden]
   books members  [--book -1]
@@ -55,6 +60,11 @@ const help = `账镜 · LedgerLens
 全程无交互；--non-interactive 为兼容参数。--db、--timeout 也可放在命令参数中。
 日期按 Asia/Shanghai 解释，since 包含当日，until 不包含当日。
 bills pull 仅返回一页变更，不更新缓存。使用 sync 获取完整缓存。
+写入从标准输入读取一个 JSON 对象，输入后关闭 stdin：
+  create: {"bills":[{"type":0,"money":18.50,"category_id":"123"}]}
+  update: {"updates":[{"id":"123","patch":{"remark":"午餐"}}]}
+  delete: {"deletions":[{"id":"123"}]}
+写入字段及结果说明见随附 Skill 的 references/commands.md「账单写入」。
 成功 JSON 写 stdout，错误 JSON 写 stderr；失败返回非零退出码。
 正式版成功检查后 24 小时内复用缓存；失败至少等待 1 小时，限流遵循服务器要求。
 已发现的更新每次提示，写入 stderr 的 notice 字段；到期联网检查最多 2 秒。
@@ -73,6 +83,7 @@ type options struct {
 	status, direction, kind, year, limit, offset int
 	lastTime, pageOffset                         int64
 	pageSign, lastTimes                          string
+	inputStdin                                   bool
 }
 
 type credentials struct {
@@ -140,6 +151,8 @@ func parse(args []string) (string, options, bool, error) {
 	case "auth status", "logout", "currencies list", "version", "update check":
 	case "sync":
 		fs.BoolVar(&o.full, "full", false, "重新全量同步")
+	case "bills create", "bills update", "bills delete":
+		fs.BoolVar(&o.inputStdin, "input-stdin", false, "从标准输入读取账单 JSON")
 	case "books list":
 		fs.BoolVar(&o.includeHidden, "include-hidden", false, "包含隐藏账本")
 	case "books members":
@@ -176,7 +189,7 @@ func parse(args []string) (string, options, bool, error) {
 		fs.StringVar(&o.billID, "id", "", "账单 ID")
 		fs.BoolVar(&o.fresh, "fresh", false, "先同步成功再查询")
 	default:
-		return "", o, false, fault.Invalid("未知命令，请使用 --help 查看只读命令")
+		return "", o, false, fault.Invalid("未知命令，请使用 --help 查看可用命令")
 	}
 	if err := fs.Parse(rest); err != nil {
 		if err == flag.ErrHelp {
@@ -186,6 +199,9 @@ func parse(args []string) (string, options, bool, error) {
 	}
 	if fs.NArg() != 0 || o.timeout <= 0 {
 		return "", o, false, fault.Invalid("参数位置或超时设置无效")
+	}
+	if (command == "bills create" || command == "bills update" || command == "bills delete") && !o.inputStdin {
+		return "", o, false, fault.Invalid("写入账单需要 --input-stdin，请通过标准输入传入 JSON")
 	}
 	if o.credentialsStdin && (o.account != "" || o.password != "" || o.digest != "") {
 		return "", o, false, fault.Invalid("凭据标准输入不能与账号、密码参数混用")
@@ -279,6 +295,30 @@ func execute(ctx context.Context, command string, o options, in io.Reader) (any,
 		return nil, err
 	}
 	switch command {
+	case "bills create":
+		var input struct {
+			Bills []service.CreateBill `json:"bills"`
+		}
+		if err := readJSON(in, &input); err != nil {
+			return nil, err
+		}
+		return svc.CreateBills(ctx, input.Bills)
+	case "bills update":
+		var input struct {
+			Updates []service.UpdateBill `json:"updates"`
+		}
+		if err := readJSON(in, &input); err != nil {
+			return nil, err
+		}
+		return svc.UpdateBills(ctx, input.Updates)
+	case "bills delete":
+		var input struct {
+			Deletions []service.DeleteBill `json:"deletions"`
+		}
+		if err := readJSON(in, &input); err != nil {
+			return nil, err
+		}
+		return svc.DeleteBills(ctx, input.Deletions)
 	case "login", "init":
 		input := credentials{Account: o.account, Password: o.password, PasswordMD5: o.digest}
 		if o.credentialsStdin {
