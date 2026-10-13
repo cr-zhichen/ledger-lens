@@ -122,18 +122,22 @@ func ValidMD5(value string) bool {
 
 // This allowlist is also enforced at the transport boundary. No arbitrary route is exposed.
 var allowedRoutes = map[string]bool{
-	"/account/login":   false,
-	"/book/list":       false,
-	"/book/members":    false,
-	"/asset/list":      false,
-	"/asset/listloan":  false,
-	"/category/listv2": false,
-	"/tag/list":        true,
-	"/budget/list":     false,
-	"/currency/listv2": false,
-	"/syncv2/pull":     true,
-	"/bill/syncall":    true,
-	"/client/init":     false,
+	"/account/login":         false,
+	"/book/list":             false,
+	"/book/members":          false,
+	"/asset/list":            false,
+	"/asset/listloan":        false,
+	"/category/listv2":       false,
+	"/tag/list":              true,
+	"/budget/list":           false,
+	"/currency/listv2":       false,
+	"/syncv2/pull":           true,
+	"/bill/syncall":          true,
+	"/client/init":           false,
+	"/bill/refund2":          false,
+	"/baoxiao/baoxiao":       false,
+	"/baoxiao/cancelbaoxiao": false,
+	"/baoxiao/upgradev2":     false,
 }
 
 func (c *Client) post(ctx context.Context, path string, session Session, form url.Values) (json.RawMessage, error) {
@@ -234,6 +238,9 @@ func businessError(path string, code int, raw json.RawMessage) error {
 		hint = nested.Message
 	}
 	hint = strings.ToLower(hint)
+	if strings.HasPrefix(path, "/baoxiao/") && (strings.Contains(hint, "升级") && strings.Contains(hint, "公测版本") || strings.Contains(hint, "报销") && strings.Contains(hint, "升级")) {
+		return fault.New("REIMBURSEMENT_UPGRADE_REQUIRED", "钱迹要求升级报销，升级后旧版本将不能继续使用报销；同意后设置 confirm_upgrade=true", 2)
+	}
 	if strings.Contains(hint, "签名") || strings.Contains(hint, "signature") || strings.Contains(hint, "sign error") || strings.HasPrefix(hint, "tok ") || hint == "tok" {
 		return fault.New("SIGNATURE_REJECTED", "钱迹请求签名被拒绝", 4)
 	}

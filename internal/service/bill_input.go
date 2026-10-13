@@ -45,6 +45,9 @@ type BillFields struct {
 	Time                     *int64    `json:"time,omitempty"`
 	Money                    *Money    `json:"money,omitempty"`
 	BaseAmount               *Money    `json:"base_amount,omitempty"`
+	TargetAmount             *Money    `json:"target_amount,omitempty"`
+	Currency                 *string   `json:"currency,omitempty"`
+	AutoConvert              *bool     `json:"auto_convert,omitempty"`
 	Discount                 *Money    `json:"discount,omitempty"`
 	CategoryID               *string   `json:"category_id,omitempty"`
 	AssetID                  *string   `json:"asset_id,omitempty"`
@@ -71,6 +74,12 @@ type DeleteBill struct {
 }
 
 func (f BillFields) validate() error {
+	if f.Currency != nil && !currencySymbol.MatchString(*f.Currency) {
+		return fault.Invalid("currency 必须是大写币种代码，例如 USD")
+	}
+	if f.TargetAmount != nil && (*f.TargetAmount < 0 || *f.TargetAmount > 999999999999) {
+		return fault.Invalid("到账金额超出范围，请检查 target_amount")
+	}
 	for _, item := range []struct {
 		id       *string
 		optional bool
@@ -118,7 +127,7 @@ func validateBatch(ids []string) error {
 }
 
 func (f BillFields) empty() bool {
-	return f.BookID == nil && f.Time == nil && f.Money == nil && f.BaseAmount == nil && f.Discount == nil && f.CategoryID == nil && f.AssetID == nil && f.Remark == nil && f.TagIDs == nil && f.Reimbursable == nil && f.ExcludeFromIncomeExpense == nil && f.ExcludeFromBudget == nil
+	return f.BookID == nil && f.Time == nil && f.Money == nil && f.BaseAmount == nil && f.TargetAmount == nil && f.Currency == nil && f.AutoConvert == nil && f.Discount == nil && f.CategoryID == nil && f.AssetID == nil && f.Remark == nil && f.TagIDs == nil && f.Reimbursable == nil && f.ExcludeFromIncomeExpense == nil && f.ExcludeFromBudget == nil
 }
 
 func number(value int64) json.Number { return json.Number(strconv.FormatInt(value, 10)) }

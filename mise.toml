@@ -16,7 +16,7 @@ run = "gofmt -w skill.go cmd internal scripts"
 
 [tasks.test]
 description = "运行协议、会话、CLI、更新与版本构建测试"
-run = "go test -race -timeout 60s ./..."
+run = "go test -race -timeout 3m ./..."
 
 [tasks.vet]
 description = "运行 Go 静态检查"

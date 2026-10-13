@@ -1,25 +1,17 @@
 # 账镜 · LedgerLens
 
-账镜是面向 AI Agent 的钱迹 CLI，支持查询收支及新增、修改、删除账单。账单缓存在本地，支持离线查询，无需部署服务。
+账镜是面向 AI Agent 的钱迹 CLI，支持账单管理、转账、退款、报销和收支分析。账单与基础资料缓存在本地，支持离线查询，无需部署服务。
 
 - 读取账单、账本、资产、分类、标签和预算等信息。
-- 批量新增、修改普通收支和待报销支出，删除账单。
-- 按账户原币记账，可填写本位币折算金额，支持「不计入收支」「不计入预算」开关。
-- 首次全量同步，后续增量更新，支持离线查询。
+- 管理普通收支、转账、信用卡还款、退款和报销。
+- 支持原币和跨币种记账，可填写折算金额或启用自动换算。
+- 支持高级账单筛选、收支统计和预算使用分析。
 - 账务结果输出 JSON，内置 Agent Skill，方便自动调用与汇总。
 
-收支统计由 Agent 或调用方完成。
 
 ## 快速开始
 
 从 [GitHub Releases](https://github.com/cr-zhichen/ledger-lens/releases/latest) 下载对应系统和架构的压缩包，解压后运行 `ledgerlens`（Windows 为 `ledgerlens.exe`）。`darwin` 表示 macOS，`amd64` 表示 Intel/AMD x64，`arm64` 表示 ARM64 / Apple Silicon。下载包自带 CLI 和 Agent Skill，无需安装 Go。
-
-也可准备好 `mise`，在项目根目录从源码构建：
-
-```sh
-mise install
-mise run build
-```
 
 首次使用，登录并同步账单：
 
@@ -38,14 +30,17 @@ mise run build
 ## 常用命令
 
 ```sh
-# 更新本地账单缓存
-./bin/ledgerlens sync
+# 刷新账单与基础资料
+./bin/ledgerlens cache refresh
 
 # 查询指定月份的账单，按需替换日期
 ./bin/ledgerlens bills list --since 2026-09-01 --until 2026-10-01
 
-# 查看账本
-./bin/ledgerlens books list
+# 按月统计收支
+./bin/ledgerlens bills stats --since 2026-09-01 --until 2026-10-01
+
+# 查看预算使用情况
+./bin/ledgerlens budgets get --month 2026-09 --daily
 
 # 查看本地登录与缓存状态
 ./bin/ledgerlens auth status
@@ -55,7 +50,7 @@ mise run build
 
 ## 账单管理
 
-使用 `bills create`、`bills update`、`bills delete` 管理钱迹账单。输入格式、字段及示例见[账单写入](.agents/skills/ledgerlens/references/commands.md#账单写入)。
+普通账单使用 `bills`，转账与信用卡还款使用 `transfers`，退款使用 `refunds`，报销使用 `reimbursements`。输入格式、字段及示例见[账单写入](.agents/skills/ledgerlens/references/commands.md#账单写入)。
 
 > 写入命令会直接修改钱迹中的账单，删除无法由本 CLI 撤销。
 
@@ -97,22 +92,7 @@ $ledgerlens 记一笔今天的午餐支出 25 元。
 
 已发现的新版本通过 stderr 的 JSON `notice` 提示；使用缓存时注明上次检查时间。stdout 与原命令退出码保持原有含义，失败时提示附在同一个错误 JSON 中。网络异常不影响原命令。
 
-完全离线时加 `--no-update-check`，或设置 `LEDGERLENS_NO_UPDATE_CHECK=1`。主动执行 `update check` 不受缓存期限和退避间隔限制，仍会联网，失败返回错误。更新检查只提供版本和下载链接，安装时下载对应压缩包并替换可执行文件即可，账务数据独立保留。开发构建显示 `dev`，不自动比较版本，可主动查询最新发布。
-
-## 构建与发布
-
-正式版以 Tag 为版本来源：`v1.2.3` 自动注入程序版本 `1.2.3`，无需修改版本文件。这里只接受 `vX.Y.Z` 正式版，不接受预发布后缀或数字前导零。
-
-将代码提交并推送到 GitHub 后，创建并推送正式版 Tag：
-
-```sh
-git tag -a v0.1.0 -m "Release v0.1.0"
-git push origin v0.1.0
-```
-
-GitHub Actions 会先在 macOS、Linux、Windows 上执行检查，再构建三个系统各自的 amd64 / arm64 压缩包，生成 `SHA256SUMS` 并发布正式版 Release。普通 push 到 main 和 PR 会自动运行 CI，不保存临时 Actions 构建产物。
-
-本地使用 `mise run check` 检查、`mise run package` 试打包；`RELEASE_TAG=v0.1.0 mise run release` 可复现正式版构建，要求 Tag 已存在、指向 HEAD 且工作区干净。日常 `mise run build` 仅在干净的正式版 Tag 上使用对应版本，其余标记为 `dev`。
+账务查询添加 `--offline` 后也会关闭更新检查。其他命令可加 `--no-update-check`，或设置 `LEDGERLENS_NO_UPDATE_CHECK=1`。主动执行 `update check` 仍会联网。更新时下载对应压缩包并替换可执行文件即可，账务数据独立保留。
 
 ## 许可证
 

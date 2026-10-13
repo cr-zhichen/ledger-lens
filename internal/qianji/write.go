@@ -75,7 +75,7 @@ func (c *Client) SyncBills(ctx context.Context, session Session, changes BillCha
 }
 
 func (c *Client) BaseCurrency(ctx context.Context, session Session) (string, error) {
-	data, err := c.post(ctx, "/client/init", session, url.Values{"v": {"0"}, "vvmark": {"0"}, "newinstall": {"0"}, "upgradealert": {"0"}})
+	data, err := c.Initialize(ctx, session)
 	if err != nil {
 		return "", err
 	}
@@ -92,4 +92,8 @@ func (c *Client) BaseCurrency(ctx context.Context, session Session) (string, err
 		return "CNY", nil
 	}
 	return result.Config.Base, nil
+}
+
+func (c *Client) Initialize(ctx context.Context, session Session) (json.RawMessage, error) {
+	return c.post(ctx, "/client/init", session, url.Values{"v": {"0"}, "vvmark": {"0"}, "newinstall": {"0"}, "upgradealert": {"0"}})
 }

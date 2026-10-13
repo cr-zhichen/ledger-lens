@@ -16,13 +16,17 @@ import (
 )
 
 type writeFixture struct {
-	mu           sync.Mutex
-	bills        map[string]map[string]any
-	deleted      []json.Number
-	writes       int
-	mode         string
-	wire         string
-	baseCurrency string
+	mu                sync.Mutex
+	bills             map[string]map[string]any
+	deleted           []json.Number
+	writes            int
+	mode              string
+	wire              string
+	baseCurrency      string
+	rateReads         int
+	needsUpgrade      bool
+	upgrades          int
+	reimburseAttempts int
 }
 
 func newWriteFixture(t *testing.T) (*writeFixture, *Service, *store.Store) {
@@ -42,9 +46,14 @@ func newWriteFixture(t *testing.T) (*writeFixture, *Service, *store.Store) {
 				io.WriteString(w, `{"ec":200,"data":{"list":[{"id":88,"currency":"CNY"},{"id":89,"currency":"USD"}]}}`)
 				return
 			}
-			io.WriteString(w, `{"ec":200,"data":{"list":[{"id":8,"currency":"CNY"},{"id":9,"currency":"USD"},{"id":10,"currency":"USD"},{"id":11,"currency":"EUR"},{"id":12,"currency":""}]}}`)
+			io.WriteString(w, `{"ec":200,"data":{"list":[{"id":8,"name":"现金","type":0,"currency":"CNY"},{"id":9,"name":"美元","type":0,"currency":"USD"},{"id":10,"name":"美元信用卡","type":2,"currency":"USD"},{"id":11,"name":"欧元","type":0,"currency":"EUR"},{"id":12,"name":"默认币种","type":0,"currency":""}]}}`)
 		case "/client/init":
-			json.NewEncoder(w).Encode(map[string]any{"ec": 200, "data": map[string]any{"userconfigs": map[string]any{"basecur": f.baseCurrency}}})
+			json.NewEncoder(w).Encode(map[string]any{"ec": 200, "data": map[string]any{"userinfo": map[string]any{"id": 1, "name": "fixture", "viptype": 1, "vipstart": 0, "vipend": 2100000000}, "userconfigs": map[string]any{"basecur": f.baseCurrency, "mcurrency": 1}}})
+		case "/currency/listv2":
+			f.rateReads++
+			io.WriteString(w, `{"ec":200,"data":{"list":[{"symbol":"CNY","baseprice":1},{"symbol":"USD","baseprice":7},{"symbol":"EUR","baseprice":8}]}}`)
+		case "/budget/list":
+			io.WriteString(w, `{"ec":200,"data":{"list":[{"flag":1,"money":100,"bookid":-1},{"flag":2,"money":60,"cateid":2}]}}`)
 		case "/tag/list":
 			io.WriteString(w, `{"ec":200,"data":{"list":[{"tags":[{"id":"tag-food"}]}]}}`)
 		case "/syncv2/pull":
@@ -112,6 +121,18 @@ func newWriteFixture(t *testing.T) (*writeFixture, *Service, *store.Store) {
 			if ids, ok := payload["dellist"].([]any); ok {
 				for _, value := range ids {
 					id := value.(json.Number)
+					if bill := f.bills[string(id)]; bill != nil {
+						extra, _ := billExtra(bill)
+						for key, sourceKey := range map[string]string{"rfds": "refundsid", "bxs": "bxsid"} {
+							source := f.bills[textValue(extra[sourceKey])]
+							if source != nil {
+								sourceExtra, _ := billExtra(source)
+								if rels, ok := sourceExtra[key].(map[string]any); ok {
+									delete(rels, string(id))
+								}
+							}
+						}
+					}
 					delete(f.bills, string(id))
 					f.deleted = append(f.deleted, id)
 					deleted = append(deleted, id)
@@ -126,6 +147,8 @@ func newWriteFixture(t *testing.T) (*writeFixture, *Service, *store.Store) {
 				return
 			}
 			json.NewEncoder(w).Encode(map[string]any{"ec": 200, "data": map[string]any{"sync_result": map[string]any{"bill": map[string]any{"new_ids": created, "update_ids": updated, "del_ids": deleted, "conf_ids": conflicts, "has_failed": len(conflicts) > 0}}}})
+		case "/bill/refund2", "/baoxiao/baoxiao", "/baoxiao/upgradev2", "/baoxiao/cancelbaoxiao":
+			f.serveRelated(t, w, r)
 		default:
 			t.Errorf("unexpected endpoint %s", r.URL.Path)
 			w.WriteHeader(404)
