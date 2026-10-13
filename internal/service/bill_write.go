@@ -68,7 +68,10 @@ func (s *Service) CreateBills(ctx context.Context, inputs []CreateBill) (WriteRe
 		if err := applyBillFields(bill, input.BillFields); err != nil {
 			return WriteResult{}, err
 		}
-		if err := catalog.validate(ctx, bill, true); err != nil {
+		if err := catalog.setNativeCurrency(ctx, bill, input.BaseAmount); err != nil {
+			return WriteResult{}, err
+		}
+		if err := catalog.validate(ctx, bill); err != nil {
 			return WriteResult{}, err
 		}
 		changes.Changes = append(changes.Changes, bill)
@@ -119,18 +122,25 @@ func (s *Service) UpdateBills(ctx context.Context, inputs []UpdateBill) (WriteRe
 		}
 		// Relationship-bearing bills keep their financial fields untouched here;
 		// their specialized refund/reimbursement flows are outside this command.
-		financial := input.Patch.Money != nil || input.Patch.Discount != nil || input.Patch.AssetID != nil || input.Patch.BookID != nil || input.Patch.Reimbursable != nil
+		financial := input.Patch.Money != nil || input.Patch.BaseAmount != nil || input.Patch.Discount != nil || input.Patch.AssetID != nil || input.Patch.BookID != nil || input.Patch.Reimbursable != nil
 		if len(related) > 0 && financial {
-			return WriteResult{}, fault.New("RELATED_BILLS_EXIST", "账单已有退款或报销，请在钱迹中修改金额、资产、账本或报销状态", 2)
+			return WriteResult{}, fault.New("RELATED_BILLS_EXIST", "账单已有退款或报销，请在钱迹中修改原币金额、折算金额、资产、账本或报销状态", 2)
 		}
-		currencyChange := input.Patch.Money != nil || input.Patch.Discount != nil || input.Patch.AssetID != nil
-		if extra["curr"] != nil && currencyChange {
-			return WriteResult{}, fault.New("CURRENCY_UNSUPPORTED", "跨币种账单的金额和资产请在钱迹中修改", 2)
+		currencyChange := input.Patch.Money != nil || input.Patch.BaseAmount != nil || input.Patch.Discount != nil || input.Patch.AssetID != nil
+		if currencyChange {
+			if err := catalog.validateNativeUpdate(ctx, bill, input.Patch.AssetID); err != nil {
+				return WriteResult{}, err
+			}
 		}
 		if err := applyBillFields(bill, input.Patch); err != nil {
 			return WriteResult{}, err
 		}
-		if err := catalog.validate(ctx, bill, currencyChange); err != nil {
+		if input.Patch.BaseAmount != nil {
+			if err := catalog.setNativeCurrency(ctx, bill, input.Patch.BaseAmount); err != nil {
+				return WriteResult{}, err
+			}
+		}
+		if err := catalog.validate(ctx, bill); err != nil {
 			return WriteResult{}, err
 		}
 		bill["updatetime"] = number(time.Now().Unix())
@@ -232,6 +242,28 @@ func applyBillFields(bill map[string]any, patch BillFields) error {
 	if err != nil {
 		return err
 	}
+	if patch.ExcludeFromIncomeExpense != nil || patch.ExcludeFromBudget != nil {
+		var flag uint64
+		if extra["flag"] != nil {
+			flag, err = strconv.ParseUint(textValue(extra["flag"]), 10, 64)
+			if err != nil {
+				return invalidWriteData()
+			}
+		}
+		for _, option := range []struct {
+			value *bool
+			bit   uint64
+		}{{patch.ExcludeFromIncomeExpense, 1}, {patch.ExcludeFromBudget, 2}} {
+			if option.value != nil {
+				if *option.value {
+					flag |= option.bit
+				} else {
+					flag &^= option.bit
+				}
+			}
+		}
+		extra["flag"] = json.Number(strconv.FormatUint(flag, 10))
+	}
 	if patch.Reimbursable != nil {
 		if textValue(bill["type"]) == "1" && *patch.Reimbursable {
 			return fault.Invalid("收入不能标为待报销")
@@ -244,25 +276,11 @@ func applyBillFields(bill map[string]any, patch BillFields) error {
 		}
 	}
 	if patch.Money != nil || patch.Discount != nil {
-		adjustment := Money(0)
-		if extra["transfee"] != nil {
-			value, ok := new(big.Rat).SetString(textValue(extra["transfee"]))
-			if !ok {
-				return invalidWriteData()
-			}
-			value.Mul(value, big.NewRat(100, 1))
-			if !value.IsInt() || !value.Num().IsInt64() {
-				return invalidWriteData()
-			}
-			adjustment = Money(value.Num().Int64())
+		discount, err := billDiscount(extra)
+		if err != nil {
+			return err
 		}
-		if adjustment < -999999999999 || adjustment > 999999999999 {
-			return invalidWriteData()
-		}
-		if adjustment > 0 {
-			return fault.New("BILL_UNSUPPORTED", "带手续费的账单请在钱迹中修改金额", 2)
-		}
-		discount := -adjustment
+		previousDiscount := discount
 		if patch.Discount != nil {
 			discount = *patch.Discount
 		}
@@ -273,15 +291,33 @@ func applyBillFields(bill map[string]any, patch BillFields) error {
 			if err := amount.UnmarshalJSON([]byte(textValue(bill["money"]))); err != nil {
 				return invalidWriteData()
 			}
-			amount -= adjustment
+			amount += previousDiscount
 		}
 		if amount <= 0 || amount > 999999999999 || discount > amount || (textValue(bill["type"]) == "1" && discount != 0) {
 			return fault.Invalid("优惠不能超过账单金额，收入不能设置优惠")
 		}
 		moneyJSON, _ := (amount - discount).MarshalJSON()
 		feeJSON, _ := (-discount).MarshalJSON()
+		previousMoney := bill["money"]
 		bill["money"] = json.Number(moneyJSON)
 		extra["transfee"] = json.Number(feeJSON)
+		if extra["curr"] != nil {
+			// validateNativeUpdate has checked the external currency object. An
+			// old base-currency snapshot cannot survive an amount change. An
+			// explicitly supplied base amount is applied later by the catalog.
+			curr := extra["curr"].(map[string]any)
+			grossJSON, _ := amount.MarshalJSON()
+			amountChanged := !sameValue(curr["sv"], json.Number(grossJSON)) ||
+				!sameValue(previousMoney, json.Number(moneyJSON))
+			curr["sv"] = json.Number(grossJSON)
+			if curr["ts"] != nil {
+				curr["tv"] = json.Number(moneyJSON)
+			}
+			if amountChanged {
+				delete(curr, "bs")
+				delete(curr, "bv")
+			}
+		}
 	}
 	for _, item := range []struct {
 		key   string
@@ -308,6 +344,28 @@ func applyBillFields(bill map[string]any, patch BillFields) error {
 		bill["extra"] = extra
 	}
 	return nil
+}
+
+func billDiscount(extra map[string]any) (Money, error) {
+	if extra["transfee"] == nil {
+		return 0, nil
+	}
+	value, ok := new(big.Rat).SetString(textValue(extra["transfee"]))
+	if !ok {
+		return 0, invalidWriteData()
+	}
+	value.Mul(value, big.NewRat(100, 1))
+	if !value.IsInt() || !value.Num().IsInt64() {
+		return 0, invalidWriteData()
+	}
+	adjustment := Money(value.Num().Int64())
+	if adjustment < -999999999999 || adjustment > 999999999999 {
+		return 0, invalidWriteData()
+	}
+	if adjustment > 0 {
+		return 0, fault.New("BILL_UNSUPPORTED", "带手续费的账单请在钱迹中修改金额", 2)
+	}
+	return -adjustment, nil
 }
 
 // One request only: a timeout, cancellation, or invalid receipt can follow a

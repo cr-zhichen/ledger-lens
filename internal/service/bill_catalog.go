@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/json"
+	"strings"
 
 	"ledger-lens/internal/fault"
 	"ledger-lens/internal/qianji"
@@ -47,7 +48,7 @@ func (c *writeCatalog) load(ctx context.Context, key string, read func(*qianji.C
 	return list, nil
 }
 
-func (c *writeCatalog) validate(ctx context.Context, bill map[string]any, checkCurrency bool) error {
+func (c *writeCatalog) validate(ctx context.Context, bill map[string]any) error {
 	bookID := textValue(bill["bookid"])
 	if bookID != "-1" {
 		books, err := c.load(ctx, "books", func(client *qianji.Client, session qianji.Session) (json.RawMessage, error) {
@@ -102,42 +103,15 @@ func (c *writeCatalog) validate(ctx context.Context, bill map[string]any, checkC
 	}
 	assetID := textValue(bill["assetid"])
 	if assetID != "-1" {
-		assets, err := c.load(ctx, "assets", func(client *qianji.Client, session qianji.Session) (json.RawMessage, error) {
-			return client.Assets(ctx, session, 0)
-		})
-		if err != nil {
+		if _, err := c.asset(ctx, assetID); err != nil {
 			return err
-		}
-		asset := findCatalog(assets, "id", assetID)
-		if asset == nil {
-			hidden, err := c.load(ctx, "hidden-assets", func(client *qianji.Client, session qianji.Session) (json.RawMessage, error) {
-				return client.Assets(ctx, session, 2)
-			})
-			if err != nil {
-				return err
-			}
-			asset = findCatalog(hidden, "id", assetID)
-		}
-		if asset == nil {
-			return missingReference("资产")
-		}
-		if checkCurrency && textValue(asset["currency"]) != "" {
-			if c.baseCurrency == "" {
-				data, err := c.service.Read(ctx, func(client *qianji.Client, session qianji.Session) (any, error) {
-					return client.BaseCurrency(ctx, session)
-				})
-				if err != nil {
-					return err
-				}
-				c.baseCurrency = data.(string)
-			}
-			if textValue(asset["currency"]) != c.baseCurrency {
-				return fault.New("CURRENCY_UNSUPPORTED", "此资产使用外币，请在钱迹中新增或修改金额", 2)
-			}
 		}
 	}
 	extra, err := billExtra(bill)
 	if err != nil {
+		return err
+	}
+	if err := validateBaseCurrencyPair(extra); err != nil {
 		return err
 	}
 	if extra["tags"] == nil {
@@ -173,6 +147,158 @@ func (c *writeCatalog) validate(ctx context.Context, bill map[string]any, checkC
 	for _, id := range tagIDs {
 		if !available[textValue(id)] {
 			return missingReference("标签")
+		}
+	}
+	return nil
+}
+
+func (c *writeCatalog) asset(ctx context.Context, id string) (map[string]any, error) {
+	assets, err := c.load(ctx, "assets", func(client *qianji.Client, session qianji.Session) (json.RawMessage, error) {
+		return client.Assets(ctx, session, 0)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if asset := findCatalog(assets, "id", id); asset != nil {
+		return asset, nil
+	}
+	hidden, err := c.load(ctx, "hidden-assets", func(client *qianji.Client, session qianji.Session) (json.RawMessage, error) {
+		return client.Assets(ctx, session, 2)
+	})
+	if err != nil {
+		return nil, err
+	}
+	if asset := findCatalog(hidden, "id", id); asset != nil {
+		return asset, nil
+	}
+	return nil, missingReference("资产")
+}
+
+// An asset with no explicit currency uses the account's base currency.
+func (c *writeCatalog) assetCurrency(ctx context.Context, id string) (string, error) {
+	if id != "-1" {
+		asset, err := c.asset(ctx, id)
+		if err != nil {
+			return "", err
+		}
+		if asset["currency"] != nil {
+			currency, ok := asset["currency"].(string)
+			if !ok {
+				return "", invalidWriteData()
+			}
+			if currency = strings.TrimSpace(currency); currency != "" {
+				return currency, nil
+			}
+		}
+	}
+	if c.baseCurrency == "" {
+		data, err := c.service.Read(ctx, func(client *qianji.Client, session qianji.Session) (any, error) {
+			return client.BaseCurrency(ctx, session)
+		})
+		if err != nil {
+			return "", err
+		}
+		c.baseCurrency = data.(string)
+	}
+	return c.baseCurrency, nil
+}
+
+func (c *writeCatalog) setNativeCurrency(ctx context.Context, bill map[string]any, baseAmount *Money) error {
+	id := textValue(bill["assetid"])
+	if id == "-1" && baseAmount == nil {
+		return nil
+	}
+	currency, err := c.assetCurrency(ctx, id)
+	if err != nil {
+		return err
+	}
+	base, err := c.assetCurrency(ctx, "-1")
+	if err != nil {
+		return err
+	}
+	if currency == base {
+		if baseAmount != nil {
+			return fault.Invalid("本位币账户无需折算，请移除 base_amount")
+		}
+		return nil
+	}
+	extra, err := billExtra(bill)
+	if err != nil {
+		return err
+	}
+	curr, _ := extra["curr"].(map[string]any)
+	if curr == nil {
+		discount, err := billDiscount(extra)
+		if err != nil {
+			return err
+		}
+		var net Money
+		if err := net.UnmarshalJSON([]byte(textValue(bill["money"]))); err != nil || net+discount > 999999999999 {
+			return invalidWriteData()
+		}
+		grossJSON, _ := (net + discount).MarshalJSON()
+		// Source and target are both the selected asset currency. No rates are
+		// requested; base currency and amount are only written together.
+		curr = map[string]any{"ss": currency, "sv": json.Number(grossJSON), "ts": currency, "tv": bill["money"]}
+		extra["curr"] = curr
+	}
+	if baseAmount != nil {
+		baseJSON, _ := baseAmount.MarshalJSON()
+		curr["bs"], curr["bv"] = base, json.Number(baseJSON)
+	}
+	bill["extra"] = extra
+	return nil
+}
+
+// Validate the outgoing boundary after patches have replaced or removed any
+// old snapshot. Never emit an inherited half-pair on metadata-only updates.
+func validateBaseCurrencyPair(extra map[string]any) error {
+	if extra["curr"] == nil {
+		return nil
+	}
+	curr, ok := extra["curr"].(map[string]any)
+	if !ok {
+		return invalidWriteData()
+	}
+	symbol, hasSymbol := curr["bs"]
+	amount, hasAmount := curr["bv"]
+	if !hasSymbol && !hasAmount {
+		return nil
+	}
+	var money Money
+	currency, validSymbol := symbol.(string)
+	if !hasSymbol || !hasAmount || !validSymbol || strings.TrimSpace(currency) == "" || money.UnmarshalJSON([]byte(textValue(amount))) != nil {
+		return fault.New("RESPONSE_INVALID", "账单的本位币折算信息不完整或无效，请在钱迹中修正后重试", 4)
+	}
+	return nil
+}
+
+func (c *writeCatalog) validateNativeUpdate(ctx context.Context, bill map[string]any, nextAsset *string) error {
+	previousID := textValue(bill["assetid"])
+	previous, err := c.assetCurrency(ctx, previousID)
+	if err != nil {
+		return err
+	}
+	extra, err := billExtra(bill)
+	if err != nil {
+		return err
+	}
+	if extra["curr"] != nil {
+		curr, ok := extra["curr"].(map[string]any)
+		if !ok || textValue(curr["ss"]) == "" {
+			return invalidWriteData()
+		}
+		if textValue(curr["ss"]) != previous || (curr["ts"] != nil && textValue(curr["ts"]) != previous) {
+			return fault.New("CURRENCY_UNSUPPORTED", "账单币种与账户币种不同，请在钱迹中修改金额或账户", 2)
+		}
+	}
+	if nextAsset != nil && *nextAsset != previousID {
+		next, err := c.assetCurrency(ctx, *nextAsset)
+		if err != nil {
+			return err
+		}
+		if previous != next {
+			return fault.New("CURRENCY_UNSUPPORTED", "目标账户币种与原账单不同，请选择同币种账户或在钱迹中修改", 2)
 		}
 	}
 	return nil

@@ -41,15 +41,18 @@ func (m Money) MarshalJSON() ([]byte, error) {
 }
 
 type BillFields struct {
-	BookID       *string   `json:"book_id,omitempty"`
-	Time         *int64    `json:"time,omitempty"`
-	Money        *Money    `json:"money,omitempty"`
-	Discount     *Money    `json:"discount,omitempty"`
-	CategoryID   *string   `json:"category_id,omitempty"`
-	AssetID      *string   `json:"asset_id,omitempty"`
-	Remark       *string   `json:"remark,omitempty"`
-	TagIDs       *[]string `json:"tag_ids,omitempty"`
-	Reimbursable *bool     `json:"reimbursable,omitempty"`
+	BookID                   *string   `json:"book_id,omitempty"`
+	Time                     *int64    `json:"time,omitempty"`
+	Money                    *Money    `json:"money,omitempty"`
+	BaseAmount               *Money    `json:"base_amount,omitempty"`
+	Discount                 *Money    `json:"discount,omitempty"`
+	CategoryID               *string   `json:"category_id,omitempty"`
+	AssetID                  *string   `json:"asset_id,omitempty"`
+	Remark                   *string   `json:"remark,omitempty"`
+	TagIDs                   *[]string `json:"tag_ids,omitempty"`
+	Reimbursable             *bool     `json:"reimbursable,omitempty"`
+	ExcludeFromIncomeExpense *bool     `json:"exclude_from_income_expense,omitempty"`
+	ExcludeFromBudget        *bool     `json:"exclude_from_budget,omitempty"`
 }
 
 type CreateBill struct {
@@ -82,6 +85,9 @@ func (f BillFields) validate() error {
 	if f.Discount != nil && (*f.Discount < 0 || *f.Discount > 999999999999) {
 		return fault.Invalid("优惠金额超出范围，请检查金额")
 	}
+	if f.BaseAmount != nil && (*f.BaseAmount < 0 || *f.BaseAmount > 999999999999) {
+		return fault.Invalid("本位币折算金额必须在 0～9999999999.99 之间")
+	}
 	if f.Time != nil && *f.Time <= 0 {
 		return fault.Invalid("time 必须是大于零的 Unix 秒时间戳")
 	}
@@ -112,7 +118,7 @@ func validateBatch(ids []string) error {
 }
 
 func (f BillFields) empty() bool {
-	return f.BookID == nil && f.Time == nil && f.Money == nil && f.Discount == nil && f.CategoryID == nil && f.AssetID == nil && f.Remark == nil && f.TagIDs == nil && f.Reimbursable == nil
+	return f.BookID == nil && f.Time == nil && f.Money == nil && f.BaseAmount == nil && f.Discount == nil && f.CategoryID == nil && f.AssetID == nil && f.Remark == nil && f.TagIDs == nil && f.Reimbursable == nil && f.ExcludeFromIncomeExpense == nil && f.ExcludeFromBudget == nil
 }
 
 func number(value int64) json.Number { return json.Number(strconv.FormatInt(value, 10)) }

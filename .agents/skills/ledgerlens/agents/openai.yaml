@@ -1,4 +1,4 @@
 interface:
   display_name: "账镜 · LedgerLens"
-  short_description: "通过钱迹 CLI 查询和管理账单、同步本地缓存并分析个人收支"
-  default_prompt: "使用 $ledgerlens 查询或管理我的钱迹账单，按需要刷新缓存、汇总收支或执行我指定的记账操作。"
+  short_description: "通过钱迹 CLI 按账户原币记账、设置统计开关、同步缓存并汇总收支"
+  default_prompt: "使用 $ledgerlens 按我的要求查询或管理钱迹账单，记账采用账户原币、不计算汇率，仅在我提供本位币折算金额时填写 base_amount，并设置我指定的「不计入收支」和「不计入预算」开关。"

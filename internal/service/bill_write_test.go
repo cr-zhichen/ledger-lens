@@ -16,17 +16,18 @@ import (
 )
 
 type writeFixture struct {
-	mu      sync.Mutex
-	bills   map[string]map[string]any
-	deleted []json.Number
-	writes  int
-	mode    string
-	wire    string
+	mu           sync.Mutex
+	bills        map[string]map[string]any
+	deleted      []json.Number
+	writes       int
+	mode         string
+	wire         string
+	baseCurrency string
 }
 
 func newWriteFixture(t *testing.T) (*writeFixture, *Service, *store.Store) {
 	t.Helper()
-	f := &writeFixture{bills: map[string]map[string]any{}, deleted: []json.Number{}}
+	f := &writeFixture{bills: map[string]map[string]any{}, deleted: []json.Number{}, baseCurrency: "CNY"}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
@@ -38,12 +39,12 @@ func newWriteFixture(t *testing.T) (*writeFixture, *Service, *store.Store) {
 			io.WriteString(w, `{"ec":200,"data":{"list":[{"bookid":42}]}}`)
 		case "/asset/list":
 			if r.Form.Get("status") == "2" {
-				io.WriteString(w, `{"ec":200,"data":{"list":[{"id":88,"currency":"CNY"}]}}`)
+				io.WriteString(w, `{"ec":200,"data":{"list":[{"id":88,"currency":"CNY"},{"id":89,"currency":"USD"}]}}`)
 				return
 			}
-			io.WriteString(w, `{"ec":200,"data":{"list":[{"id":8,"currency":"CNY"},{"id":9,"currency":"USD"}]}}`)
+			io.WriteString(w, `{"ec":200,"data":{"list":[{"id":8,"currency":"CNY"},{"id":9,"currency":"USD"},{"id":10,"currency":"USD"},{"id":11,"currency":"EUR"},{"id":12,"currency":""}]}}`)
 		case "/client/init":
-			io.WriteString(w, `{"ec":200,"data":{"userconfigs":{"basecur":"CNY"}}}`)
+			json.NewEncoder(w).Encode(map[string]any{"ec": 200, "data": map[string]any{"userconfigs": map[string]any{"basecur": f.baseCurrency}}})
 		case "/tag/list":
 			io.WriteString(w, `{"ec":200,"data":{"list":[{"tags":[{"id":"tag-food"}]}]}}`)
 		case "/syncv2/pull":
@@ -90,6 +91,19 @@ func newWriteFixture(t *testing.T) (*writeFixture, *Service, *store.Store) {
 					if f.mode != "not-applied" {
 						if f.mode == "omit-empty-extra" {
 							delete(bill, "extra")
+						}
+						if f.mode == "drop-flags" {
+							delete(bill["extra"].(map[string]any), "flag")
+						}
+						if f.mode == "wrong-currency" {
+							bill["extra"].(map[string]any)["curr"].(map[string]any)["ss"] = "CNY"
+						}
+						if f.mode == "stale-base-currency" {
+							curr := bill["extra"].(map[string]any)["curr"].(map[string]any)
+							curr["bs"], curr["bv"] = "CNY", number(70)
+						}
+						if f.mode == "drop-base-symbol" {
+							delete(bill["extra"].(map[string]any)["curr"].(map[string]any), "bs")
 						}
 						f.bills[id] = bill
 					}
@@ -213,7 +227,7 @@ func TestBatchValidationPreventsEveryWrite(t *testing.T) {
 	for _, tc := range []struct{ input, code string }{
 		{`[{"type":0,"money":1,"category_id":"2"},{"type":0,"money":2,"category_id":"999"}]`, "REFERENCE_NOT_FOUND"},
 		{`[{"type":1,"money":1,"category_id":"2"}]`, "REFERENCE_NOT_FOUND"},
-		{`[{"type":0,"money":1,"category_id":"2","asset_id":"9"}]`, "CURRENCY_UNSUPPORTED"},
+		{`[{"type":0,"money":1,"category_id":"2","asset_id":"999"}]`, "REFERENCE_NOT_FOUND"},
 		{`[{"type":0,"money":1,"discount":2,"category_id":"2"}]`, "INVALID_ARGUMENT"},
 		{`[{"type":1,"money":1,"category_id":"3","reimbursable":true}]`, "INVALID_ARGUMENT"},
 	} {
