@@ -2,7 +2,7 @@
 
 ## 调用与返回格式
 
-下表省略 `./bin/ledgerlens` 前缀。以当前二进制 `--help` 为准；参数不符时先核对帮助与源码。
+下表省略 `ledgerlens` 前缀；源码仓库中可使用 `./bin/ledgerlens`。以当前二进制 `--help` 为准；参数不符时先核对帮助。
 
 ```text
 ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
@@ -10,7 +10,7 @@ ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
 
 `--db`、`--timeout` 和 `--no-update-check` 可放在整个命令前或叶子命令的参数中，例如 `ledgerlens --db PATH bills list` 或 `ledgerlens bills list --db PATH`，不要放在 `bills` 与 `list` 之间。`--timeout` 是单个 HTTP 请求的超时，默认 30 秒，完整同步可能持续更久；自动更新检查独立限制为 2 秒。
 
-- 成功：退出码 0，stdout 为 `{"ok":true,"data":...}`。
+- 成功：退出码 0；除 `skill show`、`prompt show` 的纯文本外，stdout 为 `{"ok":true,"data":...}`。
 - 失败：非零退出码，stderr 为 `{"ok":false,"error":{"code":"...","message":"..."}}`。
 - 帮助信息：纯文本。使用 `mise run cli` 时，运行器可能额外输出诊断信息。
 - 更新提示：成功或帮助命令的 stderr 为 `{"notice":{"code":"UPDATE_AVAILABLE",...}}`；失败时将 `notice` 附在原错误对象上，stderr 仍是单个 JSON 对象。只有 notice 不表示失败，仍以退出码及 `error.code` 决策。
@@ -25,7 +25,7 @@ ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
 | `update check` | 主动请求 GitHub 最新公开正式版，不受缓存期限和自动退避间隔限制，遵循 `--timeout`；返回 `current_version`、`latest_version`、`update_available`、`release_url`、`checked_at`、`source`。不登录、不读取账务数据库。 |
 | `--no-update-check` | 关闭本次自动检查及提示；也可设置 `LEDGERLENS_NO_UPDATE_CHECK=1`。不影响显式执行 `update check`。 |
 
-正式版每次调用（含帮助、版本及错误命令）都会读取更新状态；成功检查后 24 小时内直接复用缓存，到期后的下一次调用才并行请求 GitHub。自动请求最多 2 秒，失败后至少间隔 1 小时再尝试；遇到 `Retry-After` 或额度耗尽的 `X-RateLimit-Reset` 时，以服务器指定的更晚时间为准。自动检查由调用触发，不启动定时后台服务。
+除 `skill`、`prompt` 命令外，正式版每次调用（含帮助、版本及错误命令）都会读取更新状态；成功检查后 24 小时内直接复用缓存，到期后的下一次调用才并行请求 GitHub。自动请求最多 2 秒，失败后至少间隔 1 小时再尝试；遇到 `Retry-After` 或额度耗尽的 `X-RateLimit-Reset` 时，以服务器指定的更晚时间为准。自动检查由调用触发，不启动定时后台服务。
 
 已有新版本时每次继续提示，不缓存“已读”状态；升级后重新比较当前版本，旧提示自动消失。`source=cache` 只表示复用本地记录，`checked_at` 始终是上次成功在线确认时间，不表示本次联网失败。主动检查始终请求远端，成功会重新计算 24 小时有效期，失败会报错并更新自动退避时间，不将缓存冒充在线结果。
 
@@ -34,6 +34,19 @@ ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
 比较按主版本、次版本、补丁版本的数值顺序执行，例如 `1.10.0 > 1.9.0`。仅接受 `vX.Y.Z` 正式版，拒绝草稿及预发布。`dev` 不自动检查；主动检查可获取最新 Release，但 `update_available=null`，不能据此声称当前开发源码落后。正式版 `update_available=false` 表示远端版本不高于当前版本，不会建议降级。
 
 更新检查不发送钱迹账号、Token 或账务内容。缓存仅保存版本 Tag、成功检查时间与最早重试时间，独立位于系统用户缓存目录的 `ledger-lens/update.json`（macOS 为 `~/Library/Caches/ledger-lens/update.json`），相邻的 `update.json.lock` 用于进程互斥。兼容旧版只含 Tag 和检查时间的缓存。更新功能只检查和提示，不自动下载、替换或重启程序。
+
+## Skill 与提示词
+
+以下命令只使用当前 CLI 自带的内容，无需登录，不联网、不检查更新，也不打开账务数据库。
+
+| 命令 | 参数与输出 |
+| --- | --- |
+| `skill show` | 输出 Skill Markdown。`--file` 默认 `SKILL.md`，也可指定 `references/commands.md` 或 `agents/openai.yaml`。 |
+| `skill export --dir PATH` | 导出完整 Skill 目录；PATH 中直接包含 `SKILL.md`、`references/commands.md`、`agents/openai.yaml`。 |
+| `prompt show` | 输出默认提示词文本，可直接复制给 Agent。 |
+| `prompt export --output PATH` | 将默认提示词保存为 UTF-8 文本文件。 |
+
+两种导出命令默认不覆盖文件；`--force`（默认 false）允许覆盖对应文件，Skill 目录中的其他文件会保留。成功 JSON 的 `data` 包含 `version`、`commit`、`build_date` 和导出文件的绝对路径列表 `files`。更新 CLI 后重新导出即可获取新版本内容，已导出的文件不会自动更新。
 
 ## 认证与缓存
 
@@ -148,6 +161,9 @@ ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
 | error.code | 下一步 |
 | --- | --- |
 | `INVALID_ARGUMENT` | 核对 `--help`，修正日期、ID、必需参数或互斥参数。 |
+| `EXPORT_EXISTS` | 目标文件已存在；确认要更新这些文件后添加 `--force`，或换一个导出位置。 |
+| `EXPORT_TARGET_INVALID`、`EXPORT_FAILED` | 检查导出位置、目录权限和剩余空间，或更换路径。 |
+| `BUNDLE_INVALID` | CLI 的内置内容无法读取，重新安装对应版本。 |
 | `REFERENCE_NOT_FOUND`、`BOOK_EXPIRED` | 重新查询对应目录或在钱迹中处理账本状态，再调整输入。 |
 | `WRITE_BUSY` | 当前写入尚未开始，等待另一个写入命令结束后重试。 |
 | `BILL_NOT_OWNED` | 只能修改或删除当前账号创建的账单；核对目标，不切换账号绕过限制。 |

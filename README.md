@@ -5,7 +5,7 @@
 - 读取账单、账本、资产、分类、标签和预算等信息。
 - 批量新增、修改普通收支和待报销支出，删除账单。
 - 首次全量同步，后续增量更新，支持离线查询。
-- 输出 JSON，内置 Agent Skill，方便自动调用与汇总。
+- 账务结果输出 JSON，内置 Agent Skill，方便自动调用与汇总。
 
 收支统计由 Agent 或调用方完成。
 
@@ -60,7 +60,18 @@ mise run build
 
 ## 交给 Agent 使用
 
-项目内置 [LedgerLens Skill](.agents/skills/ledgerlens/SKILL.md)，支持该 Skill 的 Agent 可以这样调用：
+CLI 内置对应版本的 Skill 和默认提示词，无需登录或联网即可获取：
+
+```sh
+./bin/ledgerlens skill show
+./bin/ledgerlens prompt show
+./bin/ledgerlens skill export --dir ./ledgerlens-skill
+./bin/ledgerlens prompt export --output ./ledgerlens-prompt.txt
+```
+
+导出目录包含完整的 [LedgerLens Skill](.agents/skills/ledgerlens/SKILL.md)，可交给支持 Skill 的 Agent。更新 CLI 后重新导出即可更新内容；如需覆盖已有文件，添加 `--force`。
+
+支持该 Skill 的 Agent 可以这样调用：
 
 ```text
 $ledgerlens 查询我近一周的花销，按分类汇总。
@@ -83,7 +94,7 @@ $ledgerlens 记一笔今天的午餐支出 25 元。
 
 正式版成功检查后 **24 小时内复用本地缓存**；到期后的下一次调用才会并行请求 GitHub，最多等待 2 秒。检查失败后至少间隔 **1 小时**再尝试，限流时遵循服务器指定的更晚时间。并发调用共享检查状态，避免重复联网。
 
-已发现的新版本仍会在每次调用时通过 stderr 的 JSON `notice` 提示，直到当前程序升级；使用缓存时注明上次检查时间。stdout 与原命令退出码保持原有含义，失败时提示附在同一个错误 JSON 中。网络异常不影响原命令。
+已发现的新版本通过 stderr 的 JSON `notice` 提示；使用缓存时注明上次检查时间。stdout 与原命令退出码保持原有含义，失败时提示附在同一个错误 JSON 中。网络异常不影响原命令。
 
 完全离线时加 `--no-update-check`，或设置 `LEDGERLENS_NO_UPDATE_CHECK=1`。主动执行 `update check` 不受缓存期限和退避间隔限制，仍会联网，失败返回错误。更新检查只提供版本和下载链接，安装时下载对应压缩包并替换可执行文件即可，账务数据独立保留。开发构建显示 `dev`，不自动比较版本，可主动查询最新发布。
 

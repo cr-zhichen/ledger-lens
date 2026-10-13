@@ -12,7 +12,7 @@ run = "go mod tidy"
 
 [tasks.fmt]
 description = "格式化 Go 代码"
-run = "gofmt -w cmd internal scripts"
+run = "gofmt -w skill.go cmd internal scripts"
 
 [tasks.test]
 description = "运行协议、会话、CLI、更新与版本构建测试"
