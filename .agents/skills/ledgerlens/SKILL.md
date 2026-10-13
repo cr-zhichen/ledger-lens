@@ -7,26 +7,32 @@ description: "使用 LedgerLens（账镜）CLI 查询钱迹账单、账本、资
 
 ## 先确定调用入口
 
-在 LedgerLens 仓库根目录执行命令。本 Skill 随仓库放在 `.agents/skills/ledgerlens/`；若被复制到其他位置，先定位实际仓库或已安装的 `ledgerlens`，不要依赖固定的个人目录。
+优先使用已安装并可执行的 `ledgerlens`；从源码使用时，在仓库根目录调用 `./bin/ledgerlens`。本文的 `ledgerlens` 均指选定入口，不依赖固定的个人目录。
 
 ```sh
-./bin/ledgerlens --help
-./bin/ledgerlens --version
-./bin/ledgerlens auth status
+ledgerlens --help
+ledgerlens --version
+ledgerlens auth status
 ```
 
-缺少二进制或需要使其与当前源码一致时，使用仓库工具链构建：
+只有源码仓库中缺少二进制或需要与源码一致时，才使用仓库工具链构建：
 
 ```sh
 mise install
 mise run build
 ```
 
-也可使用 `mise run cli -- <命令及参数>`。自动解析输出时优先直接调用二进制，分别读取 stdout、stderr 和退出码。完整参数与错误处理见 [命令参考](references/commands.md)。不要假定存在 `stats`、`export` 或 `--json`；账单统计由调用方完成，正常输出已经是 JSON。
+源码仓库也可使用 `mise run cli -- <命令及参数>`。自动解析输出时优先直接调用二进制，分别读取 stdout、stderr 和退出码。完整参数与错误处理见 [命令参考](references/commands.md)。不要假定存在 `stats`、账单导出或 `--json`；账单统计由调用方完成。
 
-正式版成功检查后 24 小时内复用更新缓存，到期后的调用才会自动请求 GitHub；失败后至少间隔 1 小时再尝试，限流时等待服务器指定的更晚时间。已发现的新版本每次调用仍会提示。stderr 中的 `notice.code=UPDATE_AVAILABLE` 是提示，不是失败；命令失败时 `notice` 与 `error` 位于同一个 JSON 对象中，仍按 `error.code` 决策。向用户简要转述更新及下载链接，不自行下载安装。`notice.source=cache` 表示使用本地记录，应注明 `checked_at` 是上次成功在线检查时间，不能据此判断本次联网失败。
+正式版成功检查后 24 小时内复用更新缓存，到期后的调用才会自动请求 GitHub；失败后至少间隔 1 小时再尝试，限流时等待服务器指定的更晚时间。stderr 中的 `notice.code=UPDATE_AVAILABLE` 是提示，不是失败；命令失败时 `notice` 与 `error` 位于同一个 JSON 对象中，仍按 `error.code` 决策。向用户简要转述更新及下载链接，不自行下载安装。`notice.source=cache` 表示使用本地记录，应注明 `checked_at` 是上次成功在线检查时间，不能据此判断本次联网失败。
 
 用户要求完全离线时添加 `--no-update-check`，或设置 `LEDGERLENS_NO_UPDATE_CHECK=1`。`update check` 是主动联网命令，即使关闭自动检查仍会请求 GitHub，离线任务不要执行它。`version` / `--version` 和 `update check` 均不打开账务数据库；`dev` 构建只支持主动查询，`update_available=null` 表示当前开发版本无法比较。
+
+## 获取本版本的 Skill 和提示词
+
+CLI 自带本版本的指南，查看与导出均无需登录、完全离线。命令及文件选项见[Skill 与提示词](references/commands.md#skill-与提示词)。只有可执行文件时，先用 `ledgerlens skill show --file references/commands.md` 读取命令参考。更新 CLI 后按用户要求重新导出；已有文件需要覆盖时，先确认用户的更新授权涵盖这些文件，再使用 `--force`。
+
+`skill show`、`prompt show` 输出纯文本，不能按 JSON 解析；导出命令及账务命令仍输出 JSON。
 
 ## 根据会话与任务选择操作
 
@@ -40,7 +46,7 @@ mise run build
 初始化示例：
 
 ```sh
-./bin/ledgerlens init --credentials-stdin --non-interactive
+ledgerlens init --credentials-stdin --non-interactive
 ```
 
 执行工具向进程 stdin 写入一个 JSON 对象，随后**关闭 stdin，发送 EOF**。仅写入换行而保持输入流打开会一直等待。
@@ -57,7 +63,7 @@ mise run build
 2. 按上一节决定是否同步，再查询日期范围。以下为示例月份，实际调用时替换日期：
 
    ```sh
-   ./bin/ledgerlens bills list --since 2026-08-01 --until 2026-09-01 --limit 1000 --offset 0
+   ledgerlens bills list --since 2026-08-01 --until 2026-09-01 --limit 1000 --offset 0
    ```
 
 3. 从 `data.items` 读取账单，记录 `data.total` 和 `data.synced_at`。将 offset 增加本页实际条数，保留相同筛选条件，直到读完 total。limit 最大为 10000，不能假定一页完整。

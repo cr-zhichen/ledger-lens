@@ -26,6 +26,12 @@ const help = `账镜 · LedgerLens
   update check                            在线检查最新正式版
   --no-update-check                       本次调用不自动检查更新
 
+Skill 与提示词：
+  skill show     [--file SKILL.md]         查看本版本 Skill
+  skill export   --dir PATH [--force]     导出完整 Skill；--force 覆盖同名文件
+  prompt show                             查看默认提示词
+  prompt export  --output PATH [--force]  导出提示词；--force 覆盖目标文件
+
 认证与缓存：
   init           --credentials-stdin       登录并完成首次账单缓存
   login          --credentials-stdin       仅登录并保存会话
@@ -64,10 +70,12 @@ bills pull 仅返回一页变更，不更新缓存。使用 sync 获取完整缓
   create: {"bills":[{"type":0,"money":18.50,"category_id":"123"}]}
   update: {"updates":[{"id":"123","patch":{"remark":"午餐"}}]}
   delete: {"deletions":[{"id":"123"}]}
-写入字段及结果说明见随附 Skill 的 references/commands.md「账单写入」。
-成功 JSON 写 stdout，错误 JSON 写 stderr；失败返回非零退出码。
+使用 skill show --file references/commands.md 查看完整参数与示例。
+Skill 与提示词命令完全离线，无需登录；导出目录直接包含 SKILL.md。
+skill show、prompt show 输出纯文本；其他成功结果为 JSON，均写 stdout。
+错误 JSON 写 stderr；失败返回非零退出码。
 正式版成功检查后 24 小时内复用缓存；失败至少等待 1 小时，限流遵循服务器要求。
-已发现的更新每次提示，写入 stderr 的 notice 字段；到期联网检查最多 2 秒。
+更新提示写入 stderr 的 notice 字段；到期联网检查最多 2 秒。
 update check 不受自动检查间隔限制，主动联网检查。
 网络异常不影响原命令；LEDGERLENS_NO_UPDATE_CHECK=1 可关闭自动检查。
 `
@@ -84,6 +92,8 @@ type options struct {
 	lastTime, pageOffset                         int64
 	pageSign, lastTimes                          string
 	inputStdin                                   bool
+	localContent, force                          bool
+	skillFile, exportDir, output                 string
 }
 
 type credentials struct {
@@ -129,9 +139,10 @@ func parse(args []string) (string, options, bool, error) {
 		return "", o, true, nil
 	}
 	command := args[0]
+	o.localContent = command == "skill" || command == "prompt"
 	rest := args[1:]
 	switch command {
-	case "auth", "books", "assets", "categories", "tags", "budgets", "currencies", "bills", "update":
+	case "auth", "books", "assets", "categories", "tags", "budgets", "currencies", "bills", "update", "skill", "prompt":
 		if len(rest) == 0 || rest[0] == "--help" || rest[0] == "-h" {
 			return "", o, true, nil
 		}
@@ -148,7 +159,15 @@ func parse(args []string) (string, options, bool, error) {
 		fs.BoolVar(&o.credentialsStdin, "credentials-stdin", false, "通过标准输入读取凭据 JSON")
 		fs.BoolVar(&o.nonInteractive, "non-interactive", false, "使用无交互模式")
 		fs.StringVar(&o.baseURL, "api-url", "", "API 根地址")
-	case "auth status", "logout", "currencies list", "version", "update check":
+	case "auth status", "logout", "currencies list", "version", "update check", "prompt show":
+	case "skill show":
+		fs.StringVar(&o.skillFile, "file", "SKILL.md", "查看 SKILL.md、references/commands.md 或 agents/openai.yaml")
+	case "skill export":
+		fs.StringVar(&o.exportDir, "dir", "", "Skill 导出目录")
+		fs.BoolVar(&o.force, "force", false, "覆盖同名文件")
+	case "prompt export":
+		fs.StringVar(&o.output, "output", "", "提示词导出文件")
+		fs.BoolVar(&o.force, "force", false, "覆盖目标文件")
 	case "sync":
 		fs.BoolVar(&o.full, "full", false, "重新全量同步")
 	case "bills create", "bills update", "bills delete":
@@ -226,14 +245,29 @@ func Run(ctx context.Context, args []string, in io.Reader, out, stderr io.Writer
 
 func run(ctx context.Context, args []string, in io.Reader, out, stderr io.Writer, info version.Info, checker updateChecker) int {
 	command, o, showHelp, err := parse(args)
-	finishUpdate := startUpdateCheck(ctx, checker, info.Version, o.noUpdateCheck || (command == "update check" && !showHelp))
+	finishUpdate := startUpdateCheck(ctx, checker, info.Version, o.noUpdateCheck || o.localContent || (command == "update check" && !showHelp))
 	if err == nil && showHelp {
 		_, err = io.WriteString(out, help)
 	}
 	var data any
 	var explicitNotice *update.Notice
+	textOutput := command == "skill show" || command == "prompt show"
 	if err == nil && !showHelp {
 		switch command {
+		case "skill show", "prompt show":
+			var content []byte
+			if command == "skill show" {
+				content, err = readSkillFile(o.skillFile)
+			} else {
+				content, err = promptContent()
+			}
+			if err == nil {
+				_, err = out.Write(content)
+			}
+		case "skill export":
+			data, err = exportSkill(o.exportDir, o.force, info)
+		case "prompt export":
+			data, err = exportPrompt(o.output, o.force, info)
 		case "version":
 			data = info
 		case "update check":
@@ -249,7 +283,7 @@ func run(ctx context.Context, args []string, in io.Reader, out, stderr io.Writer
 			data, err = execute(ctx, command, o, in)
 		}
 	}
-	if err == nil && !showHelp {
+	if err == nil && !showHelp && !textOutput {
 		var payload []byte
 		payload, err = outputJSON(data)
 		if err == nil {

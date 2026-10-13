@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -17,6 +18,7 @@ import (
 	"strings"
 	"time"
 
+	ledgerlens "ledger-lens"
 	"ledger-lens/internal/version"
 )
 
@@ -153,7 +155,18 @@ func smoke(path string, expected version.Info) error {
 	if err != nil {
 		return err
 	}
-	out, err := exec.Command(abs, "--no-update-check", "version").Output()
+	isolated, err := os.MkdirTemp("", "ledgerlens-smoke-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(isolated)
+	runBinary := func(args ...string) ([]byte, error) {
+		cmd := exec.Command(abs, args...)
+		cmd.Dir = isolated
+		cmd.Env = append(os.Environ(), "LEDGERLENS_DB="+filepath.Join(isolated, "unused.sqlite"))
+		return cmd.Output()
+	}
+	out, err := runBinary("--no-update-check", "version")
 	if err != nil {
 		return fmt.Errorf("版本运行检查失败：%w", err)
 	}
@@ -163,6 +176,50 @@ func smoke(path string, expected version.Info) error {
 	}
 	if err := json.Unmarshal(out, &result); err != nil || !result.OK || result.Data != expected {
 		return fmt.Errorf("二进制中的版本信息与构建参数不一致：%s", path)
+	}
+	files, err := ledgerlens.SkillFiles()
+	if err != nil {
+		return err
+	}
+	if _, err := runBinary("skill", "export", "--dir", "exported"); err != nil {
+		return fmt.Errorf("独立 CLI 导出 Skill 失败：%w", err)
+	}
+	if err := fs.WalkDir(files, ".", func(name string, entry fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+		source, err := fs.ReadFile(files, name)
+		if err != nil {
+			return err
+		}
+		shown, err := runBinary("skill", "show", "--file", name)
+		if err != nil || string(shown) != string(source) {
+			return fmt.Errorf("内置 Skill 查看内容不一致：%s", name)
+		}
+		exported, err := os.ReadFile(filepath.Join(isolated, "exported", name))
+		if err != nil || string(exported) != string(source) {
+			return fmt.Errorf("内置 Skill 导出内容不一致：%s", name)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	prompt, err := runBinary("prompt", "show")
+	if err != nil || strings.TrimSpace(string(prompt)) == "" {
+		return fmt.Errorf("独立 CLI 查看提示词失败")
+	}
+	if _, err := runBinary("prompt", "export", "--output", "prompt.txt"); err != nil {
+		return fmt.Errorf("独立 CLI 导出提示词失败：%w", err)
+	}
+	exportedPrompt, err := os.ReadFile(filepath.Join(isolated, "prompt.txt"))
+	if err != nil || string(exportedPrompt) != string(prompt) {
+		return fmt.Errorf("内置提示词导出内容不一致")
+	}
+	if _, err := os.Stat(filepath.Join(isolated, "unused.sqlite")); !os.IsNotExist(err) {
+		return fmt.Errorf("Skill 或提示词命令访问了账务数据库")
 	}
 	return nil
 }
