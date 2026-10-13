@@ -132,12 +132,14 @@ var allowedRoutes = map[string]bool{
 	"/budget/list":     false,
 	"/currency/listv2": false,
 	"/syncv2/pull":     true,
+	"/bill/syncall":    true,
+	"/client/init":     false,
 }
 
 func (c *Client) post(ctx context.Context, path string, session Session, form url.Values) (json.RawMessage, error) {
 	htoken, allowed := allowedRoutes[path]
 	if !allowed {
-		return nil, fault.New("READ_ONLY_VIOLATION", "此版本仅允许已定义的登录与读取接口", 2)
+		return nil, fault.New("ROUTE_NOT_ALLOWED", "不支持此接口，请使用 --help 中的命令", 2)
 	}
 	if path != "/account/login" {
 		if session.UID == "" || session.Token == "" || session.Device == "" {

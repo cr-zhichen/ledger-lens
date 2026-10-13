@@ -65,6 +65,40 @@ ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
 
 日期按北京时间解释；since 包含当天零点，until 不包含当天零点。账单默认只查本地；添加 `--fresh` 时必须先同步成功。
 
+## 账单写入
+
+三个命令均需要登录并联网，通过 `--input-stdin` 接收一个 JSON 对象，输入完成后关闭 stdin。单笔操作也使用只有一项的列表。
+
+| 命令 | 输入 |
+| --- | --- |
+| `bills create --input-stdin` | `{"bills":[{"type":0,"money":18.50,"category_id":"123","remark":"午餐"}]}` |
+| `bills update --input-stdin` | `{"updates":[{"id":"456","patch":{"money":20,"remark":"午餐含饮料"}}]}` |
+| `bills delete --input-stdin` | `{"deletions":[{"id":"456"}]}` |
+
+示例中的分类与账单 ID 必须替换为查询得到的真实 ID。调用命令后粘贴 JSON 并发送 EOF；自动调用时由执行工具将 JSON 写入 stdin 后关闭输入流。
+
+新增时 `type` 必填：0 为支出，1 为收入。以下字段用于新增账单或修改的 `patch`；修改时省略的字段保持不变，`patch` 不能为空，不能修改收支类型。
+
+| 字段 | 用途 | 新增时默认值 |
+| --- | --- | --- |
+| `money` | 账单主金额，数字，必须大于 0、最多两位小数，上限 9999999999.99 | 必填 |
+| `category_id` | 对应账本和收支类型的分类 ID，字符串 | 必填 |
+| `book_id` | 账本 ID，字符串 | `"-1"`，默认账本 |
+| `asset_id` | 资产 ID，字符串；`"-1"` 表示不关联资产 | `"-1"` |
+| `time` | 记账时间，Unix 秒时间戳；自然语言日期按 Asia/Shanghai 转换 | 当前时间 |
+| `remark` | 备注；传 `""` 可清空 | 空字符串 |
+| `discount` | 支出优惠，数字，最多两位小数，不超过 money；实际支出为 money 减 discount | 0 |
+| `tag_ids` | 标签 ID 字符串列表；传 `[]` 可清空 | 空列表 |
+| `reimbursable` | 支出是否待报销，布尔值 | false |
+
+修改已有优惠账单的 `money` 时保留原优惠；传 `discount:0` 可取消优惠。金额使用本位币；外币资产的新增、跨币种账单的金额与资产修改应在钱迹中完成。已有退款或报销关联的源账单，仅支持修改备注、时间、分类和标签。
+
+删除支持普通收支、待报销支出、转账和信用卡还款。每项填写 `id`；只有确定连同关联退款、报销记录一起删除时，才添加 `"cascade_related":true`（默认 false）。退款、报销子账单和借贷、分期等特殊账单的独立操作请在钱迹中完成。
+
+成功返回 `data.items` 与 `data.synced_at`。每项包含 `index`（结果列表中从 0 开始的序号）、`id`（字符串）、`status`、`confirmed`；新增和修改还返回完整 `bill`。关联删除的源账单与子账单分别列出。只有所有项目写入并同步核对成功才返回退出码 0。
+
+发生写入错误时，逐项结果位于 `error.details.items`：`applied` 表示钱迹已接受，`conflict` 表示发生冲突，`unknown` 表示尚无法确认。`confirmed:true` 表示已在同步结果中核对；没有 `synced_at` 表示本次写后同步未成功。先按错误处理表处理，不能根据非零退出码推断远端未改动。
+
 ## 远端只读资料
 
 | 命令 | 参数 |
@@ -114,13 +148,21 @@ ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
 | error.code | 下一步 |
 | --- | --- |
 | `INVALID_ARGUMENT` | 核对 `--help`，修正日期、ID、必需参数或互斥参数。 |
+| `REFERENCE_NOT_FOUND`、`BOOK_EXPIRED` | 重新查询对应目录或在钱迹中处理账本状态，再调整输入。 |
+| `WRITE_BUSY` | 当前写入尚未开始，等待另一个写入命令结束后重试。 |
+| `BILL_NOT_OWNED` | 只能修改或删除当前账号创建的账单；核对目标，不切换账号绕过限制。 |
+| `BILL_UNSUPPORTED`、`CURRENCY_UNSUPPORTED` | 当前操作不支持该账单或币种，请在钱迹中完成。 |
+| `RELATED_BILLS_EXIST` | 根据消息核对退款、报销关联；关联删除必须已获得覆盖全部记录的授权。 |
+| `WRITE_PARTIAL`、`WRITE_CONFLICT` | 阅读 `error.details.items`，保留成功项目，不重试整个批次；先同步核对其余项目。 |
+| `WRITE_UNCERTAIN` | 请求可能已经生效，先执行 `sync`，按返回的 ID 和原参数逐项核对；不能自动重试新增、修改或删除。 |
+| `WRITE_CONFIRMATION_FAILED` | 钱迹已接受写入，本地确认未完成。只重试 `sync` 并核对结果，不再次写入。 |
 | `UPDATE_NOT_FOUND` | 没有可读取的公开正式版 Release，可能尚未发布或仓库不可访问；不能据此声称已是最新版。 |
 | `UPDATE_RATE_LIMITED`、`UPDATE_CHECK_FAILED` | 主动更新检查失败，稍后重试，不重新登录钱迹。自动检查遇到这些错误不影响原命令。 |
 | `UPDATE_INVALID` | GitHub 返回的版本不是有效正式版，报告错误，不建议安装。 |
 | `AUTH_REQUIRED` | 在线任务需要登录；复用已授权凭据，缺失时询问。离线账单读取不需重新登录。 |
 | `CACHE_EMPTY` | 缓存未初始化；任务允许联网时同步，无会话则初始化。用户只要离线结果时说明尚无缓存。 |
 | `INIT_SYNC_FAILED` | 会话已保存，重试 `sync`，并按消息中的原始错误码排查，不重复提交密码。 |
-| `TOKEN_EXPIRED` | CLI 已尝试可用的自动重登流程。确需认证时使用已授权凭据登录一次；缺少或被拒绝时询问，不盲目循环。 |
+| `TOKEN_EXPIRED` | 读取和写前同步可自动重登一次；写入提交不会自动重登重发。确需认证时使用已授权凭据登录，随后同步核对再决定后续操作。 |
 | `LOGIN_REJECTED` | 登录被拒绝，停止重复使用同一凭据，请用户确认所需登录信息。 |
 | `ACCOUNT_MISMATCH` | 用户 ID 不一致，停止操作并说明账号冲突，不覆盖或混用缓存。 |
 | `STATE_CHANGED` | 本地状态被并发更新；重新读取状态，同一已授权账号下可重试一次。 |

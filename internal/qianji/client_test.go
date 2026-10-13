@@ -181,7 +181,7 @@ func TestLowercaseProtocolHeadersOnHTTP1Wire(t *testing.T) {
 	}
 }
 
-func TestReadBoundaryAndRedirect(t *testing.T) {
+func TestRouteBoundaryAndRedirect(t *testing.T) {
 	var calls atomic.Int32
 	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { calls.Add(1) }))
 	defer target.Close()
@@ -189,9 +189,9 @@ func TestReadBoundaryAndRedirect(t *testing.T) {
 		w.Header().Set("Location", target.URL)
 		w.WriteHeader(307)
 	})
-	_, err := client.post(context.Background(), "/bill/syncall", Session{}, url.Values{})
-	if !fault.Is(err, "READ_ONLY_VIOLATION") {
-		t.Fatalf("write was not blocked: %v", err)
+	_, err := client.post(context.Background(), "/bill/arbitrary", Session{}, url.Values{})
+	if !fault.Is(err, "ROUTE_NOT_ALLOWED") {
+		t.Fatalf("undefined route was not blocked: %v", err)
 	}
 	_, err = client.Books(context.Background(), Session{UID: "1", Token: "secret", Device: "d"}, false)
 	if !fault.Is(err, "HTTP_ERROR") || calls.Load() != 0 {

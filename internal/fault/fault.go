@@ -7,6 +7,7 @@ type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Exit    int    `json:"-"`
+	Details any    `json:"details,omitempty"`
 }
 
 func (e *Error) Error() string { return e.Message }

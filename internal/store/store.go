@@ -15,7 +15,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-type Store struct{ db *sql.DB }
+type Store struct {
+	db   *sql.DB
+	path string
+}
 
 type Account struct {
 	Revision    int64
@@ -94,7 +97,7 @@ CREATE INDEX IF NOT EXISTS bills_by_book ON bills (owner, book_id, occurred_at D
 		_ = db.Close()
 		return nil, databaseError()
 	}
-	return &Store{db: db}, nil
+	return &Store{db: db, path: abs}, nil
 }
 
 func (s *Store) Close() error { return s.db.Close() }

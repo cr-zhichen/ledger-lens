@@ -4,11 +4,11 @@
 
 ## 调用钱迹 CLI
 
-查询钱迹账单、花销、账本或其他只读资料，或管理账单缓存时，先阅读 [LedgerLens Skill](.agents/skills/ledgerlens/SKILL.md)，按需查阅其中的命令参考。支持 Skill 的 Agent 可通过 `$ledgerlens` 显式调用。
+查询钱迹资料、新增修改删除账单，或管理账单缓存时，先阅读 [LedgerLens Skill](.agents/skills/ledgerlens/SKILL.md)，按需查阅其中的命令参考。支持 Skill 的 Agent 可通过 `$ledgerlens` 显式调用。
 
 从仓库根目录运行 `./bin/ledgerlens`；缺少二进制时通过 `mise run build` 构建。入口帮助为 `./bin/ledgerlens --help`，本地会话与缓存状态使用 `./bin/ledgerlens auth status`。
 
-当前版本仅调用远端认证与只读账务接口；同步会更新本地缓存。复用已有会话，根据用户要求选择刷新或离线读取。汇总前读完分页，保留金额和 ID 的精度，并说明统计日期与缓存同步时间。凭据和个人账务数据不写入受版本控制的文件。
+账单写入会修改钱迹中的数据，仅执行用户已授权的操作；关联删除和失败处理遵循 Skill。复用已有会话，根据用户要求选择刷新或离线读取。汇总前读完分页，保留金额和 ID 的精度，并说明统计日期与缓存同步时间。凭据和个人账务数据不写入受版本控制的文件。
 
 ## 开发约定
 

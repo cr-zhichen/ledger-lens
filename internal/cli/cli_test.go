@@ -204,7 +204,7 @@ func TestInitFailureKeepsLoginAndExplicitDigest(t *testing.T) {
 	}
 }
 
-func TestCLIRejectsWritesAndRedactsFailures(t *testing.T) {
+func TestCLIRejectsInvalidArgumentsAndRedactsFailures(t *testing.T) {
 	dbPath := filepath.Join(t.TempDir(), "ledger.sqlite")
 	for _, args := range [][]string{
 		{"bills", "delete", "--id", "1"},
