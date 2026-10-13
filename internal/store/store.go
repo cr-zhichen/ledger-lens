@@ -92,6 +92,10 @@ CREATE TABLE IF NOT EXISTS bills (
 );
 CREATE INDEX IF NOT EXISTS bills_by_time ON bills (owner, occurred_at DESC, id);
 CREATE INDEX IF NOT EXISTS bills_by_book ON bills (owner, book_id, occurred_at DESC);
+CREATE TABLE IF NOT EXISTS catalogs (
+ owner TEXT NOT NULL, name TEXT NOT NULL, raw TEXT NOT NULL, updated_at TEXT NOT NULL,
+ PRIMARY KEY (owner, name)
+);
 `)
 	if err != nil {
 		_ = db.Close()

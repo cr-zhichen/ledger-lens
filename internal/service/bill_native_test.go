@@ -101,8 +101,9 @@ func TestNativeCurrencyCreateAndUpdateWithoutRates(t *testing.T) {
 	if err != nil || !result.Items[0].Confirmed || !strings.Contains(string(result.Items[0].Bill), `"money":20.01`) {
 		t.Fatalf("same-currency hidden asset/discount update: %+v %v", result, err)
 	}
-	// No fixture implements /currency/listv2: a rate lookup is an unexpected
-	// request and fails this entire write, even if its result were unused.
+	if f.rateReads != 0 {
+		t.Fatal("native writes looked up exchange rates")
+	}
 }
 
 func TestOptionalBaseAmountCreateAndUpdate(t *testing.T) {
@@ -214,14 +215,14 @@ func TestBaseAmountConfirmationRejectsMissingOrChangedConversion(t *testing.T) {
 	}
 }
 
-func TestNativeUpdateRejectsCurrencyReinterpretation(t *testing.T) {
+func TestCurrencyUpdateRequiresTargetAmount(t *testing.T) {
 	for _, asset := range []string{"8", "11", "-1", "12"} {
 		t.Run(asset, func(t *testing.T) {
 			f, svc, _ := newWriteFixture(t)
 			f.bills["100"] = fixtureBill(t, "100")
 			f.bills["100"]["assetid"] = number(9)
 			_, err := svc.UpdateBills(context.Background(), []UpdateBill{{ID: "100", Patch: fixturePatch(t, `{"asset_id":"`+asset+`","money":20}`)}})
-			if !fault.Is(err, "CURRENCY_UNSUPPORTED") || f.writes != 0 {
+			if !fault.Is(err, "INVALID_ARGUMENT") || f.writes != 0 {
 				t.Fatalf("currency was reinterpreted: %v", err)
 			}
 		})
@@ -231,7 +232,7 @@ func TestNativeUpdateRejectsCurrencyReinterpretation(t *testing.T) {
 	f.bills["100"]["assetid"] = number(8)
 	f.bills["100"]["extra"] = map[string]any{"curr": map[string]any{"ss": "USD", "sv": number(10), "ts": "CNY", "tv": number(70)}}
 	_, err := svc.UpdateBills(context.Background(), []UpdateBill{{ID: "100", Patch: fixturePatch(t, `{"money":20}`)}})
-	if !fault.Is(err, "CURRENCY_UNSUPPORTED") || f.writes != 0 {
+	if !fault.Is(err, "INVALID_ARGUMENT") || f.writes != 0 {
 		t.Fatalf("cross-currency write accepted: %v", err)
 	}
 }
@@ -248,7 +249,7 @@ func TestDiscountUpdateClearsConversionWithoutTargetFields(t *testing.T) {
 	bill, _ := decodeObject(result.Items[0].Bill)
 	extra, _ := billExtra(bill)
 	curr := extra["curr"].(map[string]any)
-	if textValue(bill["money"]) != "9.00" || textValue(curr["sv"]) != "10.25" || len(curr) != 2 || textValue(extra["flag"]) != "2" {
+	if textValue(bill["money"]) != "9.00" || textValue(curr["sv"]) != "10.25" || len(curr) != 4 || textValue(extra["flag"]) != "2" {
 		t.Fatalf("discount kept a stale conversion or changed original amount: %s", result.Items[0].Bill)
 	}
 }

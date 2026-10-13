@@ -57,6 +57,7 @@ ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
 | `login --credentials-stdin` | 仅登录并保存会话。 |
 | `sync` | 首次全量同步，之后增量同步全部账本的账单。 |
 | `sync --full` | 完整拉取成功后重建当前账号的账单缓存。 |
+| `cache refresh` | 刷新账单、用户、账本、正常与隐藏账户、分类、标签和币种目录。预算、成员和借贷详情在对应查询时缓存。 |
 | `logout` | 清除本地密码 MD5 和 Token，保留账号、用户 ID、设备标识和账单。 |
 
 凭据 stdin 接收一个 JSON 对象后需关闭输入流。`account` 可在已有账号时省略，`password` 与 `password_md5` 二选一。不要将 `--credentials-stdin` 与 `--account`、`--password`、`--password-md5` 混用；不支持 stdin 的执行工具可使用后者的参数形式，但不要回显含凭据的完整命令。
@@ -71,16 +72,58 @@ ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
 
 | 命令 | 参数与返回 |
 | --- | --- |
-| `bills list` | `--book ID`、`--since YYYY-MM-DD`、`--until YYYY-MM-DD`、`--limit 100`、`--offset 0`、`--fresh`。limit 为 1～10000，offset 非负。省略 book 查询全部缓存账本。 |
-| `bills get --id ID` | 可加 `--fresh`；`data` 直接是原始账单对象。 |
+| `bills list` | `--book ID`、`--since YYYY-MM-DD`、`--until YYYY-MM-DD`、`--currency USD`、`--limit 100`、`--offset 0`、`--fresh` 或 `--offline`。limit 为 1～10000，offset 非负。省略 book 查询全部缓存账本。 |
+| `bills list --filter-stdin` | 从 stdin 读取下表的 JSON 筛选条件，可加 `--fresh` 或 `--offline`，不能同时使用其他筛选参数。 |
+| `bills get --id ID` | 可加 `--fresh` 或 `--offline`；`data` 直接是原始账单对象。 |
 
 列表的 `data` 包含 `items`、`total`、`limit`、`offset`、`source: "cache"`、`synced_at` 和 `initialized`。total 是筛选范围内所有类型的账单总数。空 items 且 total 为 0 才表示已初始化缓存中的该范围没有账单。
 
 日期按北京时间解释；since 包含当天零点，until 不包含当天零点。账单默认只查本地；添加 `--fresh` 时必须先同步成功。
 
+`--filter-stdin` 的字段如下。省略字段表示不限制，`since/until` 和创建时间使用 Unix 秒，结束边界均不包含。
+
+| 字段 | 含义与默认值 |
+| --- | --- |
+| `book_id`、`since`、`until` | 账本及发生时间；默认全部缓存账本、全部时间。 |
+| `created_since`、`created_until` | 创建时间范围。 |
+| `types` | 类型数字数组，例如 `[0,1,5]`。 |
+| `min_money`、`max_money` | 原币主金额范围，包含边界。 |
+| `category_ids`、`include_subcategories` | 分类 ID 数组；默认包含子分类，需要分类缓存。 |
+| `tag_ids`、`tag_match` | 标签 ID 数组；`any`（默认）或 `all`。 |
+| `remark_keyword` | 备注子串，不区分大小写。 |
+| `asset_ids` | 匹配主账户、转出或转入账户中的任意一个。 |
+| `asset_id`、`from_asset_id`、`target_asset_id` | 分别精确匹配主账户、转出和转入账户。 |
+| `member_ids` | 记账人 ID 字符串数组。 |
+| `source` | 0 手动、2 导入、120 周期、121 分期、122 自动记账。 |
+| `currency` | 原始记账币种；必要时读取账户和用户缓存。 |
+| `no_asset`、`no_tags` | 只查无账户或无标签的记录，默认 false。 |
+| `exclude_from_income_expense`、`exclude_from_budget` | 按统计开关筛选；省略表示不限，false 表示未开启。 |
+| `sort` | `time_desc`（默认）、`time_asc`、`money_desc` 或 `money_asc`。 |
+| `limit`、`offset` | 默认 100、0。 |
+
+```json
+{"types":[0,5],"tag_ids":["tag-food"],"remark_keyword":"午餐","min_money":20,"exclude_from_income_expense":false,"sort":"money_desc","limit":100}
+```
+
+## 统计与预算
+
+```sh
+ledgerlens bills stats --since 2026-09-01 --until 2026-10-01 --fresh
+ledgerlens bills stats --currency USD --unit month --offline
+ledgerlens bills stats --filter-stdin --unit day
+ledgerlens budgets get --book -1 --month 2026-09 --daily --fresh
+ledgerlens budgets get --book -1 --year 2026 --offline
+```
+
+`bills stats` 支持账单列表的日期、账本、币种参数或同一套 `--filter-stdin`，统计全部匹配记录，忽略分页。`--unit` 默认 day，也可为 month、year。返回 `summary`、`counts`、`categories`、`members`、`time_series`、`average`、`currency`、`synced_at`；日均分母只计算已结束的完整日历日。
+
+收支默认按本位币统计；指定 `--currency USD` 则只统计原币为 USD 的记录。退款、报销通过源账单关联处理，子账单不重复计入收支；转账和信用卡还款本金单列，手续费计入支出。两个统计开关分别作用于收支与预算。缺少历史折算金额会报错，不能把未折算外币直接加到本位币中。
+
+`budgets get` 的 `--book` 默认 -1，`--month` 或 `--year` 必须二选一。返回预算总额、已用、剩余、分类使用情况；`--daily` 返回逐日支出、累计支出和剩余预算，默认 false。月份遵循账本配置的月份起始日。`--offline` 仅读取缓存，缺少对应期间的预算时先联网查询一次；`--fresh` 刷新账单和基础资料后再分析。
+
 ## 账单写入
 
-三个命令均需要登录并联网，通过 `--input-stdin` 接收一个 JSON 对象，输入完成后关闭 stdin。单笔操作也使用只有一项的列表。
+以下写入命令均需要登录并联网，通过 `--input-stdin` 接收一个 JSON 对象，输入完成后关闭 stdin。单笔操作也使用只有一项的列表。
 
 | 命令 | 输入 |
 | --- | --- |
@@ -94,7 +137,10 @@ ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
 
 | 字段 | 用途 | 新增时默认值 |
 | --- | --- | --- |
-| `money` | 账户币种的账单主金额，数字，必须大于 0、最多两位小数，上限 9999999999.99 | 必填 |
+| `money` | 原币主金额，数字，必须大于 0、最多两位小数，上限 9999999999.99 | 必填 |
+| `currency` | 原始记账币种，例如 USD | 账户币种；未关联账户时为本位币 |
+| `target_amount` | 优惠后到账或扣款金额，使用账户币种；跨币种时填写或自动换算 | 同币种时使用实际金额 |
+| `auto_convert` | 查询汇率补齐所需折算金额，布尔值；显式金额优先 | false |
 | `base_amount` | 外币账单优惠后实际金额对应的本位币折算金额，数字，0～9999999999.99，最多两位小数 | 省略，仅记原币 |
 | `category_id` | 对应账本和收支类型的分类 ID，字符串 | 必填 |
 | `book_id` | 账本 ID，字符串 | `"-1"`，默认账本 |
@@ -109,11 +155,11 @@ ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
 
 两个统计开关独立设置，可同时开启。修改时省略某个开关就保留原值，传 `false` 取消该开关。
 
-选择 USD 账户时，`money:10` 表示 10 USD，新增和修改均按账户原币处理；未选择账户时使用本位币。CLI 不查询汇率、不计算折算金额。原币账单按币种分别汇总，不将原币金额当作本位币。
+选择 USD 账户时，`money:10` 表示 10 USD，新增和修改均按账户原币处理；未选择账户时使用本位币。原币与账户币种不同时，填写 `currency` 和 `target_amount`，或设置 `auto_convert:true`。
 
-已知本位币折算金额时可传 `base_amount`，本位币币种由 CLI 读取钱迹配置；本位币账户不接受此参数。可以单独修改 `base_amount`。不要猜测折算金额或自行查询汇率补齐。
+已知本位币折算金额时可传 `base_amount`，本位币币种由 CLI 读取钱迹配置；本位币账户不接受此参数。可以单独修改 `base_amount`。开启自动换算后，CLI 只补齐缺少的金额；已传金额优先。`bs/bv` 始终同时保存或省略。
 
-原币金额或优惠发生变化且未传 `base_amount` 时，旧折算值会被移除；传入时保存新值。只改备注、分类、标签、统计开关或转到同币种账户时保留原值。账单币种与账户币种不同，或需要更换到另一币种账户时，请在钱迹中修改。
+原币金额或优惠发生变化时，需要重新提供跨币种到账金额或开启自动换算；没有新本位币金额且未开启自动换算时移除旧折算值。只改备注、分类、标签或统计开关时保留历史金额。修改 `money` 使用原币，不使用账户折算后的金额。
 
 修改已有优惠账单的 `money` 时保留原优惠；传 `discount:0` 可取消优惠。已有退款或报销关联的源账单，仅支持修改备注、时间、分类、标签和两个统计开关。
 
@@ -129,26 +175,74 @@ ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
 {"updates":[{"id":"789","patch":{"money":20,"base_amount":142.50,"exclude_from_budget":false}}]}
 ```
 
-删除支持普通收支、待报销支出、转账和信用卡还款。每项填写 `id`；只有确定连同关联退款、报销记录一起删除时，才添加 `"cascade_related":true`（默认 false）。退款、报销子账单和借贷、分期等特殊账单的独立操作请在钱迹中完成。
+删除支持普通收支、待报销支出、转账和信用卡还款。每项填写 `id`；只有确定连同关联退款、报销记录一起删除时，才添加 `"cascade_related":true`（默认 false）。退款和报销子账单使用下述独立命令；借贷、分期等特殊账单写入请在钱迹中完成。
+
+### 转账与信用卡还款
+
+`transfers create --input-stdin` 创建单笔，`transfers update --input-stdin` 接收 `{"id":"...","patch":{...}}`；删除使用 `bills delete`。
+
+```json
+{"money":100,"from_asset_id":"10","target_asset_id":"20","credit_repayment":true,"fee":1,"auto_convert":true}
+```
+
+转出、转入账户和 `money` 必填；金额使用转出账户币种。`credit_repayment` 默认 false，true 时转入账户必须为信用卡。`fee`、`discount` 默认 0，不能同时大于 0，也不能超过主金额。修改手续费会取消旧优惠，修改优惠会取消旧手续费。
+
+| 同币种示例 | 实际转出 | 实际到账 |
+| --- | --- | --- |
+| `money:100, fee:10` | 100 | 90 |
+| `money:100, discount:10` | 90 | 100 |
+
+跨币种的 `target_amount`、`base_amount` 填写上述到账金额的折算值；自动换算也使用到账金额。
+
+支持 `book_id`、`time`、`remark`、`tag_ids`、两个统计开关、`target_amount`、`base_amount` 和 `auto_convert`，含义见上表。不填写普通账单的 `category_id`、`asset_id`、`reimbursable` 或 `currency`。转出、转入账户不能相同，借贷账户不支持转账。
+
+### 退款
+
+| 命令 | 输入示例 |
+| --- | --- |
+| `refunds create --input-stdin` | `{"source_id":"100","money":20,"asset_id":"10","remark":"退货"}` |
+| `refunds update --input-stdin` | `{"id":"101","patch":{"money":15,"remark":"部分退款"}}` |
+| `refunds delete --input-stdin` | `{"id":"101"}` |
+
+退款使用源账单原币。新增必须填写 `source_id`、`money`，源账单必须是普通支出或待报销支出。`asset_id` 默认沿用原账单，传 `"-1"` 不关联账户；可传 `time`、`remark`、`tag_ids` 及三个换算参数 `target_amount`、`base_amount`、`auto_convert`。时间默认当前时间且晚于源账单。修改省略字段保留原值，不能更换源账单。独立删除只删除退款记录并更新原关联。
+
+### 报销
+
+```sh
+ledgerlens reimbursements create --input-stdin
+ledgerlens reimbursements delete --input-stdin
+ledgerlens reimbursements cancel --input-stdin
+```
+
+```json
+{"source_ids":["100","101"],"money":150,"asset_id":"10","remark":"差旅报销","auto_convert":true}
+```
+
+新增必须填写待报销源账单 ID 列表 `source_ids` 和总金额 `money`，同一批使用相同原币。可传 `asset_id`（默认不关联账户）、`time`（默认当前时间）、`remark`、`tag_ids` 和三个换算参数。总金额按源账单时间从早到晚分配，最后一笔接收余量；可以超过待报销余额。确认总额与源账单范围后再调用。
+
+删除一条报销入账传 `{"id":"201"}`；取消一批源账单的全部报销关系传 `{"source_ids":["100","101"]}`，会删除这些源账单关联的报销入账记录。报销只是标记待报销状态时，仍使用 `bills update` 的 `reimbursable`。
+
+`confirm_upgrade` 默认 false。只有钱迹返回 `REIMBURSEMENT_UPGRADE_REQUIRED` 且用户明确接受“升级后旧版本将不能继续使用报销”，才以相同业务参数加 `"confirm_upgrade":true` 重试；升级只在服务端要求时执行。
 
 成功返回 `data.items` 与 `data.synced_at`。每项包含 `index`（结果列表中从 0 开始的序号）、`id`（字符串）、`status`、`confirmed`；新增和修改还返回完整 `bill`。关联删除的源账单与子账单分别列出。只有所有项目写入并同步核对成功才返回退出码 0。
 
 发生写入错误时，逐项结果位于 `error.details.items`：`applied` 表示钱迹已接受，`conflict` 表示发生冲突，`unknown` 表示尚无法确认。`confirmed:true` 表示已在同步结果中核对；没有 `synced_at` 表示本次写后同步未成功。先按错误处理表处理，不能根据非零退出码推断远端未改动。
 
-## 远端只读资料
+## 基础资料
 
 | 命令 | 参数 |
 | --- | --- |
-| `books list` | `--include-hidden` 包含隐藏账本。 |
+| `user info` | 用户资料、VIP 状态及期限、本位币和多币种状态。 |
+| `books list` | `--include-hidden` 包含隐藏账本，`--name` 按名称子串筛选。 |
 | `books members` | `--book ID`，默认 `-1`。 |
-| `assets list` | `--status 0\|2`，默认 0；0 正常，2 隐藏。 |
+| `assets list` | `--status 0\|2`，默认 0；0 正常，2 隐藏。`--name` 按名称子串筛选。 |
 | `assets debts` | 必须指定 `--direction 51\|52`，`--status 0\|1` 默认 0。方向值的业务含义须有依据再解释。 |
 | `categories list` | `--book ID` 默认 `-1`；`--type -1\|0\|1` 默认 -1，分别为全部、支出、收入分类。 |
 | `tags list` | `--status -1\|1\|2` 默认 -1；`--lasttime 0`。 |
 | `budgets list` | `--book ID` 默认 `-1`；`--month YYYY-MM` 与 `--year YYYY` 必须且只能选一项。 |
 | `currencies list` | 无专属参数。 |
 
-这些接口保留远端数据结构，读取实际返回字段。账本、成员、分类等列表通常位于 `data.list`；资产可能分组，标签为包含 `tags` 的分组，不要把分组数当作标签数。分类有 `parentid`、`level` 等层级字段。远端 book 默认值 `-1` 是协议哨兵值，不能等同于本地查询的“全部账本”。
+这些命令默认联网读取并缓存，可加 `--offline` 完全离线查询；返回 `source` 和 `synced_at`。目录内容保留远端数据结构，读取实际返回字段。账本、成员、分类等列表通常位于 `data.list`；资产可能分组，标签为包含 `tags` 的分组，不要把分组数当作标签数。分类有 `parentid`、`level` 等层级字段。远端 book 默认值 `-1` 是协议哨兵值，不能等同于本地查询的“全部账本”。
 
 ## 直接拉取变更页
 
@@ -172,10 +266,10 @@ ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
 ## 统计口径
 
 - JSON 金额可能为数字或字符串，账单等 ID 可能超出 JavaScript 安全整数范围。使用无损 JSON 解析和精确十进制，例如 Python `json.loads(text, parse_float=Decimal)` 再以 `Decimal` 处理金额字符串。不要先经 JavaScript `Number` 或二进制浮点丢失精度后再转换。ID 保留为字符串或任意精度整数，用户 ID 不转换为数字。
-- 常规花销只汇总 `type=0` 的 `money`；收入 `type=1` 单独统计。消费笔数是筛选后的数量，不是分页 total。只有用户询问净收支时才考虑收入与支出的差额。
+- 优先使用上述内置统计；自行汇总时先确定用户要普通消费还是完整收支口径，不能把列表 total 当作消费笔数。
 - `extra.flag` 缺省为 0；`flag & 1` 非零表示不计入收支，`flag & 2` 非零表示不计入预算。一般收支汇总排除前者，预算统计排除后者；明细查询按用户要求决定是否保留。
 - 检查负数、退款、报销、关联账单与特殊类型，按有依据的业务含义处理，不推测类型码、不重复抵扣。无法确认的项目单列并说明口径。
-- 多币种分别汇总，不自行查询汇率或换算。`extra.curr` 中的 `ss/sv` 是原币及主金额，`ts/tv` 是账户币种及实际金额；本 CLI 新增外币账单时两者币种相同，`money` 为优惠后的账户金额。`bs/bv` 是本位币及实际金额的折算值，必须同时存在或同时省略；仅在用户明确需要且两者完整时用于本位币汇总，不能重算或补造。缺少原币币种信息时查询关联账户，不能假定为人民币。保留精度至最终展示。
+- 历史统计只使用保存的原币或折算金额，不按当前汇率重算。`extra.curr` 的 `ss/sv` 为原币及主金额，`ts/tv` 为账户币种及实际金额，`bs/bv` 为本位币及实际金额的折算值。普通收支 `money` 是账户金额；退款、报销和转账的金额含义按各命令解释，不能统一累加原始 `money`。
 - 结合 `bookid` 与 `cateid` 匹配分类，保留层级及收支类型，避免把不同账本或收入与支出的同名分类混在一起。缺失分类不能丢弃账单。
 - `remark` 可能为空，`descinfo` / `fromact` 可能描述资金账户。账户名不能当作商户名或商品名称；缺少信息时如实说明。
 - 输出只包含完成用户问题所需的汇总或明细。标明日期、统计口径与同步时间，完整读取前不声称结果完整；旧缓存不描述为实时数据。
@@ -191,7 +285,13 @@ ledgerlens [--db PATH] [--timeout 30s] <命令> [参数]
 | `REFERENCE_NOT_FOUND`、`BOOK_EXPIRED` | 重新查询对应目录或在钱迹中处理账本状态，再调整输入。 |
 | `WRITE_BUSY` | 当前写入尚未开始，等待另一个写入命令结束后重试。 |
 | `BILL_NOT_OWNED` | 只能修改或删除当前账号创建的账单；核对目标，不切换账号绕过限制。 |
-| `BILL_UNSUPPORTED`、`CURRENCY_UNSUPPORTED` | 当前操作不支持该账单或币种，请在钱迹中完成。 |
+| `BILL_UNSUPPORTED` | 当前操作不支持该账单，请在钱迹中完成。 |
+| `CURRENCY_AMOUNT_MISSING` | 缺少历史折算金额，按原币统计或根据用户提供的信息补充；不自动改账单。 |
+| `ASSET_CURRENCY_MISSING` | 账户币种资料缺失；刷新账户资料后再查询，不按本位币猜测金额。 |
+| `CURRENCY_PRICE_UNAVAILABLE` | 当前币种缺少有效汇率，改为显式填写折算金额。 |
+| `RELATED_BILL_MISSING` | 关联账单缓存缺失，执行全量同步后再统计。 |
+| `REIMBURSEMENT_UPGRADE_REQUIRED` | 解释升级影响，取得用户明确同意后才设置 confirm_upgrade。 |
+| `REIMBURSEMENT_UPGRADED_BUT_FAILED` | 升级已完成但报销未完成；先同步核对，不重复升级。 |
 | `RELATED_BILLS_EXIST` | 根据消息核对退款、报销关联；关联删除必须已获得覆盖全部记录的授权。 |
 | `WRITE_PARTIAL`、`WRITE_CONFLICT` | 阅读 `error.details.items`，保留成功项目，不重试整个批次；先同步核对其余项目。 |
 | `WRITE_UNCERTAIN` | 请求可能已经生效，先执行 `sync`，按返回的 ID 和原参数逐项核对；不能自动重试新增、修改或删除。 |

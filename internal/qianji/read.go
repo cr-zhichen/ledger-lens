@@ -97,7 +97,7 @@ func (c *Client) Currencies(ctx context.Context, s Session) (json.RawMessage, er
 }
 
 // Month is 0 for a yearly budget, otherwise 1–12.
-func (c *Client) Budgets(ctx context.Context, s Session, book string, year, month int) (json.RawMessage, error) {
+func (c *Client) Budgets(ctx context.Context, s Session, book string, year, month int, periodRange string) (json.RawMessage, error) {
 	if !ValidID(book, true) || year < 1 || year > 9999 || month < 0 || month > 12 {
 		return nil, fault.Invalid("预算需要有效账本、年份及月份")
 	}
@@ -106,7 +106,11 @@ func (c *Client) Budgets(ctx context.Context, s Session, book string, year, mont
 		filter = map[string]string{"month": strconv.Itoa(year) + "," + strconv.Itoa(month)}
 	}
 	encoded, _ := json.Marshal(filter)
-	return c.list(ctx, "/budget/list", s, url.Values{"bookid": {book}, "flts": {string(encoded)}})
+	form := url.Values{"bookid": {book}, "flts": {string(encoded)}}
+	if periodRange != "" {
+		form.Set("range", periodRange)
+	}
+	return c.list(ctx, "/budget/list", s, form)
 }
 
 type Cursor struct {

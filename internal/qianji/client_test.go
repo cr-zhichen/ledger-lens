@@ -31,6 +31,20 @@ func testClient(t *testing.T, handler http.HandlerFunc) *Client {
 	return client
 }
 
+func TestReimbursementUpgradeRequiresExplicitSuccess(t *testing.T) {
+	for _, value := range []string{`1`, `0`, `true`, `"1"`, `{"v":1}`, `{}`} {
+		t.Run(value, func(t *testing.T) {
+			client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				io.WriteString(w, `{"ec":200,"data":`+value+`}`)
+			})
+			err := client.UpgradeReimbursement(context.Background(), Session{UID: "1", Token: "fixture", Device: "fixture"})
+			if value == "1" && err != nil || value != "1" && !fault.Is(err, "RESPONSE_INVALID") {
+				t.Fatalf("migration result %s: %v", value, err)
+			}
+		})
+	}
+}
+
 func TestLoginWireAndExactUID(t *testing.T) {
 	client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 		if err := r.ParseForm(); err != nil {
@@ -76,8 +90,8 @@ func TestReadWireContracts(t *testing.T) {
 		{"categories", "/category/listv2", url.Values{"bookid": {"-1"}, "t": {"0"}}, false, func(c *Client) (json.RawMessage, error) { return c.Categories(context.Background(), a, "-1", 0) }},
 		{"tags", "/tag/list", url.Values{"status": {"-1"}, "lasttime": {"123"}}, true, func(c *Client) (json.RawMessage, error) { return c.Tags(context.Background(), a, -1, 123) }},
 		{"currencies", "/currency/listv2", url.Values{}, false, func(c *Client) (json.RawMessage, error) { return c.Currencies(context.Background(), a) }},
-		{"budget_month", "/budget/list", url.Values{"bookid": {"-1"}, "flts": {`{"month":"2026,9"}`}}, false, func(c *Client) (json.RawMessage, error) { return c.Budgets(context.Background(), a, "-1", 2026, 9) }},
-		{"budget_year", "/budget/list", url.Values{"bookid": {"-1"}, "flts": {`{"year":"2026"}`}}, false, func(c *Client) (json.RawMessage, error) { return c.Budgets(context.Background(), a, "-1", 2026, 0) }},
+		{"budget_month", "/budget/list", url.Values{"bookid": {"-1"}, "flts": {`{"month":"2026,9"}`}}, false, func(c *Client) (json.RawMessage, error) { return c.Budgets(context.Background(), a, "-1", 2026, 9, "") }},
+		{"budget_year", "/budget/list", url.Values{"bookid": {"-1"}, "flts": {`{"year":"2026"}`}}, false, func(c *Client) (json.RawMessage, error) { return c.Budgets(context.Background(), a, "-1", 2026, 0, "") }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

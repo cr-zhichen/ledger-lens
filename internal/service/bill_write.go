@@ -68,7 +68,7 @@ func (s *Service) CreateBills(ctx context.Context, inputs []CreateBill) (WriteRe
 		if err := applyBillFields(bill, input.BillFields); err != nil {
 			return WriteResult{}, err
 		}
-		if err := catalog.setNativeCurrency(ctx, bill, input.BaseAmount); err != nil {
+		if err := catalog.applyCurrency(ctx, bill, nil, input.BillFields); err != nil {
 			return WriteResult{}, err
 		}
 		if err := catalog.validate(ctx, bill); err != nil {
@@ -122,23 +122,16 @@ func (s *Service) UpdateBills(ctx context.Context, inputs []UpdateBill) (WriteRe
 		}
 		// Relationship-bearing bills keep their financial fields untouched here;
 		// their specialized refund/reimbursement flows are outside this command.
-		financial := input.Patch.Money != nil || input.Patch.BaseAmount != nil || input.Patch.Discount != nil || input.Patch.AssetID != nil || input.Patch.BookID != nil || input.Patch.Reimbursable != nil
+		financial := currencyTouched(input.Patch) || input.Patch.BookID != nil || input.Patch.Reimbursable != nil
 		if len(related) > 0 && financial {
 			return WriteResult{}, fault.New("RELATED_BILLS_EXIST", "账单已有退款或报销，请在钱迹中修改原币金额、折算金额、资产、账本或报销状态", 2)
 		}
-		currencyChange := input.Patch.Money != nil || input.Patch.BaseAmount != nil || input.Patch.Discount != nil || input.Patch.AssetID != nil
-		if currencyChange {
-			if err := catalog.validateNativeUpdate(ctx, bill, input.Patch.AssetID); err != nil {
-				return WriteResult{}, err
-			}
-		}
+		before := cloneBill(bill)
 		if err := applyBillFields(bill, input.Patch); err != nil {
 			return WriteResult{}, err
 		}
-		if input.Patch.BaseAmount != nil {
-			if err := catalog.setNativeCurrency(ctx, bill, input.Patch.BaseAmount); err != nil {
-				return WriteResult{}, err
-			}
+		if err := catalog.applyCurrency(ctx, bill, before, input.Patch); err != nil {
+			return WriteResult{}, err
 		}
 		if err := catalog.validate(ctx, bill); err != nil {
 			return WriteResult{}, err
@@ -280,7 +273,6 @@ func applyBillFields(bill map[string]any, patch BillFields) error {
 		if err != nil {
 			return err
 		}
-		previousDiscount := discount
 		if patch.Discount != nil {
 			discount = *patch.Discount
 		}
@@ -288,36 +280,19 @@ func applyBillFields(bill map[string]any, patch BillFields) error {
 		if patch.Money != nil {
 			amount = *patch.Money
 		} else {
-			if err := amount.UnmarshalJSON([]byte(textValue(bill["money"]))); err != nil {
-				return invalidWriteData()
+			amount, err = grossMoney(bill)
+			if err != nil {
+				return err
 			}
-			amount += previousDiscount
 		}
 		if amount <= 0 || amount > 999999999999 || discount > amount || (textValue(bill["type"]) == "1" && discount != 0) {
 			return fault.Invalid("优惠不能超过账单金额，收入不能设置优惠")
 		}
 		moneyJSON, _ := (amount - discount).MarshalJSON()
 		feeJSON, _ := (-discount).MarshalJSON()
-		previousMoney := bill["money"]
 		bill["money"] = json.Number(moneyJSON)
 		extra["transfee"] = json.Number(feeJSON)
-		if extra["curr"] != nil {
-			// validateNativeUpdate has checked the external currency object. An
-			// old base-currency snapshot cannot survive an amount change. An
-			// explicitly supplied base amount is applied later by the catalog.
-			curr := extra["curr"].(map[string]any)
-			grossJSON, _ := amount.MarshalJSON()
-			amountChanged := !sameValue(curr["sv"], json.Number(grossJSON)) ||
-				!sameValue(previousMoney, json.Number(moneyJSON))
-			curr["sv"] = json.Number(grossJSON)
-			if curr["ts"] != nil {
-				curr["tv"] = json.Number(moneyJSON)
-			}
-			if amountChanged {
-				delete(curr, "bs")
-				delete(curr, "bv")
-			}
-		}
+
 	}
 	for _, item := range []struct {
 		key   string
@@ -399,6 +374,9 @@ func (s *Service) writeBills(ctx context.Context, operation string, changes qian
 		return writeFailure(result, "WRITE_UNCERTAIN", "写入结果无法确认，请先执行 sync 并按返回的账单 ID 核对，不要直接重试")
 	}
 	valid := applyReceipt(&result, operation, receipt)
+	if err := s.Store.InvalidateAssets(ctx, s.Account.Owner()); err != nil {
+		return writeFailure(result, "WRITE_CONFIRMATION_FAILED", "钱迹已接受操作，账户缓存未刷新，请同步核对")
+	}
 	syncResult, syncErr := s.Sync(ctx, false)
 	if syncErr == nil {
 		result.SyncedAt = syncResult.SyncedAt
@@ -557,7 +535,7 @@ func relatedIDs(extra map[string]any) ([]string, error) {
 }
 
 func billMatches(actual, expected map[string]any) bool {
-	for _, key := range []string{"id", "userid", "bookid", "type", "money", "cateid", "assetid", "time", "remark"} {
+	for _, key := range []string{"id", "userid", "bookid", "type", "money", "cateid", "assetid", "fromid", "targetid", "time", "remark"} {
 		if !sameValue(actual[key], expected[key]) {
 			return false
 		}
@@ -596,6 +574,9 @@ func sameValue(actual, expected any) bool {
 		return aOK && bOK && a.Cmp(b) == 0
 	}
 	if object, ok := expected.(map[string]any); ok {
+		if object == nil {
+			return actual == nil
+		}
 		other, ok := actual.(map[string]any)
 		if !ok || len(other) != len(object) {
 			return false
@@ -617,4 +598,10 @@ func invalidWriteData() error {
 }
 func unsupportedBill() error {
 	return fault.New("BILL_UNSUPPORTED", "此账单类型暂不支持，请在钱迹中操作", 2)
+}
+
+func cloneBill(bill map[string]any) map[string]any {
+	raw, _ := json.Marshal(bill)
+	copied, _ := decodeObject(raw)
+	return copied
 }

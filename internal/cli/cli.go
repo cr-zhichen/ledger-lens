@@ -38,26 +38,39 @@ Skill 与提示词：
   auth status                             本地会话与缓存状态
   logout                                  清除 MD5、Token，保留账单
   sync           [--full]                 增量同步；--full 完整重建缓存
+  cache refresh                           刷新账单与全部基础资料缓存
 
 本地账单：
   bills list     [--book ID] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
-                 [--limit 100] [--offset 0] [--fresh]
-  bills get      --id ID [--fresh]
+                 [--limit 100] [--offset 0] [--currency USD] [--fresh|--offline]
+  bills list     --filter-stdin [--fresh|--offline]
+  bills get      --id ID [--fresh|--offline]
+  bills stats    [--book ID] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
+                 [--currency USD] [--unit day|month|year] [--fresh|--offline]
+  bills stats    --filter-stdin [--unit day|month|year] [--fresh|--offline]
+  budgets get    [--book -1] --month YYYY-MM 或 --year YYYY
+                 [--daily] [--fresh|--offline]
 
 账单写入（会修改钱迹中的账单）：
   bills create   --input-stdin             批量新增普通收支或待报销支出
   bills update   --input-stdin             批量修改普通收支或待报销支出
   bills delete   --input-stdin             批量删除账单
+  transfers create / update --input-stdin  创建或修改转账、信用卡还款
+  refunds create / update / delete --input-stdin
+  reimbursements create / delete / cancel --input-stdin
 
-远端只读接口：
-  books list     [--include-hidden]
+基础资料（可添加 --offline 读取缓存）：
+  user info
+  books list     [--include-hidden] [--name 关键词]
   books members  [--book -1]
-  assets list    [--status 0|2]
+  assets list    [--status 0|2] [--name 关键词]
   assets debts   --direction 51|52 [--status 0|1]
   categories list [--book -1] [--type -1|0|1]
   tags list      [--status -1|1|2] [--lasttime 0]
   budgets list   [--book -1] --month YYYY-MM 或 --year YYYY
   currencies list
+
+远端变更页：
   bills pull     [--book -1] [--pageoffset 0] [--pagesign SIGN]
                  [--lasttimes JSON] 或 --cursor-stdin
 
@@ -71,6 +84,9 @@ bills pull 仅返回一页变更，不更新缓存。使用 sync 获取完整缓
   update: {"updates":[{"id":"123","patch":{"exclude_from_budget":false}}]}
   delete: {"deletions":[{"id":"123"}]}
 使用 skill show --file references/commands.md 查看完整参数与示例。
+跨币种写入可填写 target_amount、base_amount，或用 auto_convert=true 自动换算。
+--filter-stdin 接收 JSON 筛选条件；不能与其他筛选参数混用。
+--offline 也关闭自动更新检查；缓存缺失时请先执行 cache refresh。
 Skill 与提示词命令完全离线，无需登录；导出目录直接包含 SKILL.md。
 skill show、prompt show 输出纯文本；其他成功结果为 JSON，均写 stdout。
 错误 JSON 写 stderr；失败返回非零退出码。
@@ -94,6 +110,8 @@ type options struct {
 	inputStdin                                   bool
 	localContent, force                          bool
 	skillFile, exportDir, output                 string
+	offline, filterStdin, daily                  bool
+	nameKeyword, currency, unit                  string
 }
 
 type credentials struct {
@@ -142,7 +160,7 @@ func parse(args []string) (string, options, bool, error) {
 	o.localContent = command == "skill" || command == "prompt"
 	rest := args[1:]
 	switch command {
-	case "auth", "books", "assets", "categories", "tags", "budgets", "currencies", "bills", "update", "skill", "prompt":
+	case "auth", "books", "assets", "categories", "tags", "budgets", "currencies", "bills", "update", "skill", "prompt", "user", "cache", "transfers", "refunds", "reimbursements":
 		if len(rest) == 0 || rest[0] == "--help" || rest[0] == "-h" {
 			return "", o, true, nil
 		}
@@ -159,7 +177,7 @@ func parse(args []string) (string, options, bool, error) {
 		fs.BoolVar(&o.credentialsStdin, "credentials-stdin", false, "通过标准输入读取凭据 JSON")
 		fs.BoolVar(&o.nonInteractive, "non-interactive", false, "使用无交互模式")
 		fs.StringVar(&o.baseURL, "api-url", "", "API 根地址")
-	case "auth status", "logout", "currencies list", "version", "update check", "prompt show":
+	case "auth status", "logout", "currencies list", "version", "update check", "prompt show", "user info", "cache refresh":
 	case "skill show":
 		fs.StringVar(&o.skillFile, "file", "SKILL.md", "查看 SKILL.md、references/commands.md 或 agents/openai.yaml")
 	case "skill export":
@@ -170,7 +188,7 @@ func parse(args []string) (string, options, bool, error) {
 		fs.BoolVar(&o.force, "force", false, "覆盖目标文件")
 	case "sync":
 		fs.BoolVar(&o.full, "full", false, "重新全量同步")
-	case "bills create", "bills update", "bills delete":
+	case "bills create", "bills update", "bills delete", "transfers create", "transfers update", "refunds create", "refunds update", "refunds delete", "reimbursements create", "reimbursements delete", "reimbursements cancel":
 		fs.BoolVar(&o.inputStdin, "input-stdin", false, "从标准输入读取账单 JSON")
 	case "books list":
 		fs.BoolVar(&o.includeHidden, "include-hidden", false, "包含隐藏账本")
@@ -187,7 +205,7 @@ func parse(args []string) (string, options, bool, error) {
 	case "tags list":
 		fs.IntVar(&o.status, "status", -1, "标签状态")
 		fs.Int64Var(&o.lastTime, "lasttime", 0, "标签时间戳")
-	case "budgets list":
+	case "budgets list", "budgets get":
 		fs.StringVar(&o.book, "book", "-1", "账本 ID")
 		fs.StringVar(&o.month, "month", "", "月份 YYYY-MM")
 		fs.IntVar(&o.year, "year", 0, "年份")
@@ -197,7 +215,7 @@ func parse(args []string) (string, options, bool, error) {
 		fs.StringVar(&o.pageSign, "pagesign", "", "分页签名")
 		fs.StringVar(&o.lastTimes, "lasttimes", "", "同步基线 JSON")
 		fs.BoolVar(&o.cursorStdin, "cursor-stdin", false, "标准输入读取 next_cursor JSON")
-	case "bills list":
+	case "bills list", "bills stats":
 		fs.StringVar(&o.book, "book", "", "筛选账本；省略则查询全部")
 		fs.StringVar(&o.since, "since", "", "起始日期（含）")
 		fs.StringVar(&o.until, "until", "", "结束日期（不含）")
@@ -210,6 +228,23 @@ func parse(args []string) (string, options, bool, error) {
 	default:
 		return "", o, false, fault.Invalid("未知命令，请使用 --help 查看可用命令")
 	}
+	if catalogCommand(command) || command == "budgets get" || command == "bills list" || command == "bills stats" || command == "bills get" {
+		fs.BoolVar(&o.offline, "offline", false, "只读取已缓存资料")
+	}
+	if command == "books list" || command == "assets list" {
+		fs.StringVar(&o.nameKeyword, "name", "", "按名称筛选")
+	}
+	if command == "bills list" || command == "bills stats" {
+		fs.BoolVar(&o.filterStdin, "filter-stdin", false, "读取 JSON 筛选条件")
+		fs.StringVar(&o.currency, "currency", "", "原币币种筛选")
+	}
+	if command == "bills stats" {
+		fs.StringVar(&o.unit, "unit", "day", "统计粒度 day、month 或 year")
+	}
+	if command == "budgets get" {
+		fs.BoolVar(&o.daily, "daily", false, "返回每日预算使用情况")
+		fs.BoolVar(&o.fresh, "fresh", false, "先刷新账单和基础资料")
+	}
 	if err := fs.Parse(rest); err != nil {
 		if err == flag.ErrHelp {
 			return command, o, true, nil
@@ -219,8 +254,26 @@ func parse(args []string) (string, options, bool, error) {
 	if fs.NArg() != 0 || o.timeout <= 0 {
 		return "", o, false, fault.Invalid("参数位置或超时设置无效")
 	}
-	if (command == "bills create" || command == "bills update" || command == "bills delete") && !o.inputStdin {
+	if writeCommand(command) && !o.inputStdin {
 		return "", o, false, fault.Invalid("写入账单需要 --input-stdin，请通过标准输入传入 JSON")
+	}
+	if o.offline {
+		o.noUpdateCheck = true
+	}
+	if o.offline && o.fresh {
+		return "", o, false, fault.Invalid("--offline 不能与 --fresh 同时使用")
+	}
+	if o.filterStdin {
+		conflict := false
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "book", "since", "until", "limit", "offset", "currency":
+				conflict = true
+			}
+		})
+		if conflict {
+			return "", o, false, fault.Invalid("--filter-stdin 不能与其他筛选参数混用")
+		}
 	}
 	if o.credentialsStdin && (o.account != "" || o.password != "" || o.digest != "") {
 		return "", o, false, fault.Invalid("凭据标准输入不能与账号、密码参数混用")
@@ -328,6 +381,12 @@ func execute(ctx context.Context, command string, o options, in io.Reader) (any,
 	if err != nil {
 		return nil, err
 	}
+	if strings.HasPrefix(command, "transfers ") || strings.HasPrefix(command, "refunds ") || strings.HasPrefix(command, "reimbursements ") {
+		return executeBusiness(ctx, svc, command, in)
+	}
+	if catalogCommand(command) {
+		return executeCatalog(ctx, svc, command, o)
+	}
 	switch command {
 	case "bills create":
 		var input struct {
@@ -384,17 +443,38 @@ func execute(ctx context.Context, command string, o options, in io.Reader) (any,
 		return map[string]any{"logged_out": true}, nil
 	case "sync":
 		return svc.Sync(ctx, o.full)
-	case "bills list":
-		filter, err := billFilter(o)
+	case "cache refresh":
+		return svc.Refresh(ctx)
+	case "bills list", "bills stats":
+		query, err := queryInput(o, in)
 		if err != nil {
 			return nil, err
 		}
 		if o.fresh {
-			if _, err := svc.Sync(ctx, false); err != nil {
+			if command == "bills stats" || query.Currency != "" || len(query.CategoryIDs) > 0 {
+				_, err = svc.Refresh(ctx)
+			} else {
+				_, err = svc.Sync(ctx, false)
+			}
+			if err != nil {
 				return nil, err
 			}
 		}
-		return db.ListBills(ctx, svc.Account.Owner(), filter)
+		if command == "bills stats" {
+			return svc.Statistics(ctx, service.StatisticsInput{BillQuery: query, Unit: o.unit})
+		}
+		return svc.ListBills(ctx, query)
+	case "budgets get":
+		year, month, err := budgetPeriod(o)
+		if err != nil {
+			return nil, err
+		}
+		if o.fresh {
+			if _, err := svc.Refresh(ctx); err != nil {
+				return nil, err
+			}
+		}
+		return svc.Budget(ctx, service.BudgetInput{Book: o.book, Year: year, Month: month, Daily: o.daily, Offline: o.offline})
 	case "bills get":
 		if !qianji.ValidID(o.billID, false) {
 			return nil, fault.Invalid("请提供有效的 --id")
@@ -413,43 +493,7 @@ func execute(ctx context.Context, command string, o options, in io.Reader) (any,
 			return nil, err
 		}
 	}
-	month := 0
-	if command == "budgets list" {
-		if (o.month == "") == (o.year == 0) {
-			return nil, fault.Invalid("请提供 --month YYYY-MM 或 --year YYYY 中的一项")
-		}
-		if o.month != "" {
-			date, err := time.Parse("2006-01", o.month)
-			if err != nil {
-				return nil, fault.Invalid("月份格式必须为 YYYY-MM")
-			}
-			o.year, month = date.Year(), int(date.Month())
-		}
-	}
-	return svc.Read(ctx, func(c *qianji.Client, a qianji.Session) (any, error) {
-		switch command {
-		case "books list":
-			return c.Books(ctx, a, o.includeHidden)
-		case "books members":
-			return c.Members(ctx, a, o.book)
-		case "assets list":
-			return c.Assets(ctx, a, o.status)
-		case "assets debts":
-			return c.Debts(ctx, a, o.direction, o.status)
-		case "categories list":
-			return c.Categories(ctx, a, o.book, o.kind)
-		case "tags list":
-			return c.Tags(ctx, a, o.status, o.lastTime)
-		case "currencies list":
-			return c.Currencies(ctx, a)
-		case "budgets list":
-			return c.Budgets(ctx, a, o.book, o.year, month)
-		case "bills pull":
-			return c.PullBills(ctx, a, cursor)
-		default:
-			return nil, fault.Invalid("未知读取命令")
-		}
-	})
+	return svc.Read(ctx, func(c *qianji.Client, a qianji.Session) (any, error) { return c.PullBills(ctx, a, cursor) })
 }
 
 func readJSON(in io.Reader, target any) error {
