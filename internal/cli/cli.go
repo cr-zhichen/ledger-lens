@@ -68,7 +68,7 @@ Skill 与提示词：
 bills pull 仅返回一页变更，不更新缓存。使用 sync 获取完整缓存。
 写入从标准输入读取一个 JSON 对象，输入后关闭 stdin：
   create: {"bills":[{"type":0,"money":18.50,"category_id":"123"}]}
-  update: {"updates":[{"id":"123","patch":{"remark":"午餐"}}]}
+  update: {"updates":[{"id":"123","patch":{"exclude_from_budget":false}}]}
   delete: {"deletions":[{"id":"123"}]}
 使用 skill show --file references/commands.md 查看完整参数与示例。
 Skill 与提示词命令完全离线，无需登录；导出目录直接包含 SKILL.md。
