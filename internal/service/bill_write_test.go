@@ -114,6 +114,13 @@ func newWriteFixture(t *testing.T) (*writeFixture, *Service, *store.Store) {
 						if f.mode == "drop-base-symbol" {
 							delete(bill["extra"].(map[string]any)["curr"].(map[string]any), "bs")
 						}
+						// Sync responses omit unset optional IDs instead of echoing
+						// every field from the write request.
+						for _, key := range []string{"cateid", "assetid", "fromid", "targetid"} {
+							if textValue(bill[key]) == "-1" {
+								delete(bill, key)
+							}
+						}
 						f.bills[id] = bill
 					}
 				}
@@ -179,7 +186,7 @@ func fixturePatch(t *testing.T, raw string) BillFields {
 
 func fixtureBill(t *testing.T, id string) map[string]any {
 	t.Helper()
-	bill, err := decodeObject([]byte(`{"id":` + id + `,"userid":"1","bookid":-1,"type":0,"money":10.25,"cateid":2,"assetid":-1,"fromid":-1,"targetid":-1,"time":1770000000,"createtime":1770000000,"remark":"original","extra":{"flag":2},"server_only":9007199254740993}`))
+	bill, err := decodeObject([]byte(`{"id":` + id + `,"userid":"1","bookid":-1,"type":0,"money":10.25,"cateid":2,"assetid":-1,"time":1770000000,"createtime":1770000000,"remark":"original","extra":{"flag":2},"server_only":9007199254740993}`))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -342,5 +349,153 @@ func TestUpdateRemarkOnHiddenAssetPreservesFinancialFields(t *testing.T) {
 		if !strings.Contains(f.wire, expected) {
 			t.Fatalf("historical bill changed incorrectly: %s", f.wire)
 		}
+	}
+}
+
+func TestUpdateAndDeleteBillsWithOmittedIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind string
+	}{
+		{"expense", "0"}, {"income", "1"}, {"reimbursable", "5"},
+		{"transfer", "2"}, {"repayment", "3"}, {"unassigned", "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f, svc, db := newWriteFixture(t)
+			ctx := context.Background()
+			const id = "9007199254740997"
+			bill := fixtureBill(t, id)
+			bill["type"], bill["assetid"] = json.Number(tc.kind), number(9)
+			if tc.kind == "1" {
+				bill["cateid"] = number(3)
+			}
+			transfer := tc.kind == "2" || tc.kind == "3"
+			patch := fixturePatch(t, `{"base_amount":20.48}`)
+			if transfer {
+				bill["fromid"], bill["targetid"] = number(9), number(10)
+				delete(bill, "assetid")
+				delete(bill, "cateid")
+				patch = fixturePatch(t, `{"remark":"updated"}`)
+			} else if tc.name == "unassigned" {
+				delete(bill, "assetid")
+				delete(bill, "bookid")
+				patch = fixturePatch(t, `{"remark":"updated"}`)
+			}
+			f.bills[id] = bill
+			var result WriteResult
+			var err error
+			if transfer {
+				result, err = svc.UpdateTransfer(ctx, UpdateTransfer{ID: id, Patch: TransferFields{BillFields: patch}})
+			} else {
+				result, err = svc.UpdateBills(ctx, []UpdateBill{{ID: id, Patch: patch}})
+			}
+			if err != nil || len(result.Items) != 1 || !result.Items[0].Confirmed {
+				t.Fatalf("update rejected omitted IDs: %+v %v", result, err)
+			}
+			actual, err := decodeObject(result.Items[0].Bill)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if textValue(actual["money"]) != "10.25" || textValue(actual["server_only"]) != "9007199254740993" || textValue(actual["id"]) != id {
+				t.Fatalf("update changed untouched fields: %s", result.Items[0].Bill)
+			}
+			if patch.BaseAmount != nil {
+				extra, _ := billExtra(actual)
+				curr := extra["curr"].(map[string]any)
+				if textValue(curr["bv"]) != "20.48" || curr["bs"] != "CNY" || curr["ss"] != "USD" {
+					t.Fatalf("wrong conversion: %s", result.Items[0].Bill)
+				}
+			} else if actual["remark"] != "updated" {
+				t.Fatalf("remark not updated: %s", result.Items[0].Bill)
+			}
+			result, err = svc.DeleteBills(ctx, []DeleteBill{{ID: id}})
+			if err != nil || len(result.Items) != 1 || !result.Items[0].Confirmed {
+				t.Fatalf("delete rejected omitted IDs: %+v %v", result, err)
+			}
+			if _, err := db.GetBill(ctx, svc.Account.Owner(), id); !fault.Is(err, "NOT_FOUND") || f.bills[id] != nil {
+				t.Fatalf("deleted bill remains: %v", err)
+			}
+		})
+	}
+}
+
+func TestInvalidBillIDsPreventWrites(t *testing.T) {
+	for _, tc := range []struct {
+		name, kind, field string
+		value             any
+		missing           bool
+	}{
+		{name: "missing-category", kind: "0", field: "cateid", missing: true},
+		{name: "missing-transfer-source", kind: "2", field: "fromid", missing: true},
+		{name: "missing-transfer-target", kind: "3", field: "targetid", missing: true},
+		{name: "null-optional", kind: "0", field: "fromid", value: nil},
+		{name: "empty-optional", kind: "0", field: "targetid", value: ""},
+		{name: "object-optional", kind: "2", field: "assetid", value: map[string]any{}},
+		{name: "fractional-optional", kind: "0", field: "assetid", value: json.Number("1.5")},
+		{name: "negative-optional", kind: "0", field: "fromid", value: number(-2)},
+		{name: "overflow-optional", kind: "0", field: "assetid", value: json.Number("9223372036854775808")},
+	} {
+		for _, operation := range []string{"update", "delete"} {
+			t.Run(tc.name+"/"+operation, func(t *testing.T) {
+				f, svc, _ := newWriteFixture(t)
+				bill := fixtureBill(t, "100")
+				bill["type"] = json.Number(tc.kind)
+				if tc.kind == "2" || tc.kind == "3" {
+					bill["fromid"], bill["targetid"] = number(9), number(10)
+				}
+				if tc.missing {
+					delete(bill, tc.field)
+				} else {
+					bill[tc.field] = tc.value
+				}
+				f.bills["100"] = bill
+				ctx := context.Background()
+				var err error
+				if operation == "delete" {
+					_, err = svc.DeleteBills(ctx, []DeleteBill{{ID: "100"}})
+				} else if tc.kind == "2" || tc.kind == "3" {
+					_, err = svc.UpdateTransfer(ctx, UpdateTransfer{ID: "100", Patch: TransferFields{BillFields: fixturePatch(t, `{"remark":"updated"}`)}})
+				} else {
+					_, err = svc.UpdateBills(ctx, []UpdateBill{{ID: "100", Patch: fixturePatch(t, `{"remark":"updated"}`)}})
+				}
+				if !fault.Is(err, "RESPONSE_INVALID") || f.writes != 0 || f.bills["100"]["remark"] != "original" {
+					t.Fatalf("invalid ID was accepted: error=%v writes=%d", err, f.writes)
+				}
+			})
+		}
+	}
+}
+
+func TestBillConfirmationDoesNotIgnoreSetOrInvalidIDs(t *testing.T) {
+	for _, tc := range []struct {
+		name, field string
+		expected    any
+		actual      any
+		omitActual  bool
+	}{
+		{"lost-account", "assetid", number(9), nil, true},
+		{"unexpected-account", "assetid", nil, number(9), false},
+		{"wrong-account", "assetid", number(9), number(10), false},
+		{"lost-category", "cateid", number(2), nil, true},
+		{"null-optional", "fromid", number(-1), nil, false},
+		{"empty-optional", "targetid", number(-1), "", false},
+		{"object-optional", "fromid", number(-1), map[string]any{}, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			expected := fixtureBill(t, "100")
+			actual := cloneBill(expected)
+			if tc.expected == nil {
+				delete(expected, tc.field)
+			} else {
+				expected[tc.field] = tc.expected
+			}
+			if tc.omitActual {
+				delete(actual, tc.field)
+			} else {
+				actual[tc.field] = tc.actual
+			}
+			if billMatches(actual, expected) {
+				t.Fatal("confirmed missing, changed, or malformed ID")
+			}
+		})
 	}
 }

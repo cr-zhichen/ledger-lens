@@ -221,13 +221,32 @@ func (s *Service) writableBill(ctx context.Context, id string) (map[string]any, 
 		return nil, fault.New("BILL_NOT_OWNED", "只能修改或删除当前账号创建的账单", 2)
 	}
 	for _, field := range []string{"id", "bookid", "cateid", "assetid", "fromid", "targetid"} {
-		value := textValue(bill[field])
-		if !qianji.ValidID(value, field != "id") {
-			return nil, invalidWriteData()
+		value, err := writeBillID(bill, field)
+		if err != nil {
+			return nil, err
 		}
-		bill[field] = json.Number(value)
+		bill[field] = value
 	}
 	return bill, nil
+}
+
+// Missing optional IDs have the protocol's unset value. Present values still
+// require valid IDs; null, empty strings and malformed values are not defaults.
+func writeBillID(bill map[string]any, field string) (json.Number, error) {
+	value, exists := bill[field]
+	kind := textValue(bill["type"])
+	transfer := kind == "2" || kind == "3"
+	optional := field == "bookid" || field == "assetid" ||
+		field == "cateid" && transfer ||
+		(field == "fromid" || field == "targetid") && !transfer
+	if !exists && optional {
+		return number(-1), nil
+	}
+	id := textValue(value)
+	if !qianji.ValidID(id, field != "id") {
+		return "", invalidWriteData()
+	}
+	return json.Number(id), nil
 }
 
 func applyBillFields(bill map[string]any, patch BillFields) error {
@@ -535,7 +554,14 @@ func relatedIDs(extra map[string]any) ([]string, error) {
 }
 
 func billMatches(actual, expected map[string]any) bool {
-	for _, key := range []string{"id", "userid", "bookid", "type", "money", "cateid", "assetid", "fromid", "targetid", "time", "remark"} {
+	for _, key := range []string{"id", "bookid", "cateid", "assetid", "fromid", "targetid"} {
+		actualID, actualErr := writeBillID(actual, key)
+		expectedID, expectedErr := writeBillID(expected, key)
+		if actualErr != nil || expectedErr != nil || actualID != expectedID {
+			return false
+		}
+	}
+	for _, key := range []string{"userid", "type", "money", "time", "remark"} {
 		if !sameValue(actual[key], expected[key]) {
 			return false
 		}

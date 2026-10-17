@@ -83,6 +83,15 @@ func TestCLIFlagsAndNativeMoneyRoundTrip(t *testing.T) {
 				return
 			}
 			id = bill.ID
+			var synced map[string]json.RawMessage
+			if err := json.Unmarshal(saved, &synced); err != nil {
+				t.Error(err)
+				w.WriteHeader(400)
+				return
+			}
+			delete(synced, "fromid")
+			delete(synced, "targetid")
+			saved, _ = json.Marshal(synced)
 			created, updated := []json.Number{}, []json.Number{}
 			if writes == 0 {
 				created = append(created, id)
