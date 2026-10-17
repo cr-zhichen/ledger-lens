@@ -88,7 +88,7 @@ func (f *writeFixture) serveRelated(t *testing.T, w http.ResponseWriter, r *http
 		if curr != nil {
 			extra["curr"] = curr
 		}
-		child := map[string]any{"id": json.Number(childID), "userid": "1", "bookid": source["bookid"], "cateid": source["cateid"], "assetid": asset, "fromid": number(-1), "targetid": number(-1), "type": json.Number(kind), "money": money, "time": when, "createtime": when, "remark": remark, "extra": extra}
+		child := map[string]any{"id": json.Number(childID), "userid": "1", "bookid": source["bookid"], "cateid": source["cateid"], "assetid": asset, "type": json.Number(kind), "money": money, "time": when, "createtime": when, "remark": remark, "extra": extra}
 		if f.mode == "wrong-relation" {
 			extra[sourceKey] = number(999)
 		}
