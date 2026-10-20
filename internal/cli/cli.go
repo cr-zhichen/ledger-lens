@@ -60,6 +60,8 @@ Skill 与提示词：
   reimbursements create / delete / cancel --input-stdin
   tags create    --input-stdin             新建标签，同名标签已存在时拒绝
   tags archive   --input-stdin             归档一个正常状态的标签
+  assets set-balance --input-stdin         校准资产余额，可记录差额账单
+  budgets set    --input-stdin             设置当期总预算与分类预算
 
 基础资料（可添加 --offline 读取缓存）：
   user info
@@ -69,7 +71,7 @@ Skill 与提示词：
   assets debts   --direction 51|52 [--status 0|1]
   assets get     --id ID                   单个资产账户详情
   assets groups                           资产分组
-  assets trend   --id ID --month YYYY-MM 或 --year YYYY
+  assets trend   [--id ID] [--month YYYY-MM 或 --year YYYY]  资产余额快照
   categories list [--book -1] [--type -1|0|1]
   tags list      [--status -1|1|2] [--lasttime 0]
   budgets list   [--book -1] --month YYYY-MM 或 --year YYYY
@@ -93,6 +95,8 @@ bills pull 仅返回一页变更，不更新缓存。使用 sync 获取完整缓
   delete: {"deletions":[{"id":"123"}]}
   tags create: {"name":"出差","group_id":"可选","color":"#529af8"}
   tags archive: {"id":"标签 ID"}
+  assets set-balance: {"asset_id":"123","balance":-20.5,"record_diff":true}
+  budgets set: {"month":"2026-10","total":3000,"categories":[{"category_id":"1","money":0}]}
 使用 skill show --file references/commands.md 查看完整参数与示例。
 跨币种写入可填写 target_amount、base_amount，或用 auto_convert=true 自动换算。
 --filter-stdin 接收 JSON 筛选条件；不能与其他筛选参数混用。
@@ -198,7 +202,7 @@ func parse(args []string) (string, options, bool, error) {
 		fs.BoolVar(&o.force, "force", false, "覆盖目标文件")
 	case "sync":
 		fs.BoolVar(&o.full, "full", false, "重新全量同步")
-	case "bills create", "bills update", "bills delete", "transfers create", "transfers update", "refunds create", "refunds update", "refunds delete", "reimbursements create", "reimbursements delete", "reimbursements cancel", "tags create", "tags archive":
+	case "bills create", "bills update", "bills delete", "transfers create", "transfers update", "refunds create", "refunds update", "refunds delete", "reimbursements create", "reimbursements delete", "reimbursements cancel", "tags create", "tags archive", "assets set-balance", "budgets set":
 		fs.BoolVar(&o.inputStdin, "input-stdin", false, "从标准输入读取写入 JSON")
 	case "books list":
 		fs.BoolVar(&o.includeHidden, "include-hidden", false, "包含隐藏账本")
@@ -397,7 +401,7 @@ func execute(ctx context.Context, command string, o options, in io.Reader) (any,
 	if err != nil {
 		return nil, err
 	}
-	if strings.HasPrefix(command, "transfers ") || strings.HasPrefix(command, "refunds ") || strings.HasPrefix(command, "reimbursements ") || command == "tags create" || command == "tags archive" {
+	if strings.HasPrefix(command, "transfers ") || strings.HasPrefix(command, "refunds ") || strings.HasPrefix(command, "reimbursements ") || command == "tags create" || command == "tags archive" || command == "assets set-balance" || command == "budgets set" {
 		return executeBusiness(ctx, svc, command, in)
 	}
 	if catalogCommand(command) {

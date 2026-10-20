@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -31,14 +30,8 @@ func newTagFixture(t *testing.T) (*tagFixture, *Service) {
 		r.ParseForm()
 		switch r.URL.Path {
 		case "/tag/list":
-			status := r.Form.Get("status")
-			tags := []map[string]any{}
-			for _, tag := range f.tags {
-				if status == "-1" || fmt.Sprint(tag["status"]) == status {
-					tags = append(tags, tag)
-				}
-			}
-			json.NewEncoder(w).Encode(map[string]any{"ec": 200, "data": map[string]any{"list": []any{map[string]any{"id": "g1", "name": "默认", "tags": tags}}}})
+			// Like upstream, the status parameter is ignored.
+			json.NewEncoder(w).Encode(map[string]any{"ec": 200, "data": map[string]any{"list": []any{map[string]any{"id": "g1", "name": "默认", "tags": f.tags}}}})
 		case "/tag/submittag":
 			f.writes++
 			var fields map[string]string
@@ -55,7 +48,7 @@ func newTagFixture(t *testing.T) (*tagFixture, *Service) {
 			f.writes++
 			for _, tag := range f.tags {
 				if tag["id"] == r.Form.Get("did") && f.mode != "no-op" {
-					tag["status"] = 2
+					tag["status"] = 3 - tag["status"].(int)
 				}
 			}
 			io.WriteString(w, `{"ec":200,"data":{}}`)

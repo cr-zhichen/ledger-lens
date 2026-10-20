@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"regexp"
+	"strconv"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -157,20 +158,10 @@ func (s *Service) ArchiveTag(ctx context.Context, input ArchiveTag) (TagResult, 
 	return result, nil
 }
 
-// loadTags reads online and caches only the full directory, matching tags list.
+// loadTags reads the full directory online and filters by each tag's own
+// status: upstream tag/list ignores its status parameter.
 func (s *Service) loadTags(ctx context.Context, status int) ([]tagEntry, map[string]bool, store.Catalog, error) {
-	read := func(c *qianji.Client, a qianji.Session) (json.RawMessage, error) { return c.Tags(ctx, a, status, 0) }
-	var catalog store.Catalog
-	var err error
-	if status == -1 {
-		catalog, err = s.Catalog(ctx, "tags", false, read)
-	} else {
-		var value any
-		value, err = s.Read(ctx, func(c *qianji.Client, a qianji.Session) (any, error) { return read(c, a) })
-		if err == nil {
-			catalog.Data = value.(json.RawMessage)
-		}
-	}
+	catalog, err := s.Catalog(ctx, "tags", false, func(c *qianji.Client, a qianji.Session) (json.RawMessage, error) { return c.Tags(ctx, a, -1, 0) })
 	if err != nil {
 		return nil, nil, catalog, err
 	}
@@ -196,6 +187,9 @@ func (s *Service) loadTags(ctx context.Context, status int) ([]tagEntry, map[str
 			item, ok := value.(map[string]any)
 			if !ok {
 				return nil, nil, catalog, invalidWriteData()
+			}
+			if status != -1 && textValue(item["status"]) != strconv.Itoa(status) {
+				continue
 			}
 			tags = append(tags, tagEntry{id: textValue(item["id"]), name: strings.TrimSpace(textValue(item["name"])), group: groupID, raw: item})
 		}
@@ -227,7 +221,7 @@ func (s *Service) writeClient(ctx context.Context) (*qianji.Client, error) {
 
 // definiteFailure reports upstream rejections that prove nothing was written.
 func definiteFailure(err error) bool {
-	for _, code := range []string{"TOKEN_EXPIRED", "AUTH_REQUIRED", "BUSINESS_ERROR", "SIGNATURE_REJECTED", "INVALID_ARGUMENT"} {
+	for _, code := range []string{"TOKEN_EXPIRED", "AUTH_REQUIRED", "BUSINESS_ERROR", "SIGNATURE_REJECTED", "INVALID_ARGUMENT", "VIP_REQUIRED"} {
 		if fault.Is(err, code) {
 			return true
 		}

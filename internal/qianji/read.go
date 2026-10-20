@@ -186,12 +186,10 @@ func (c *Client) Asset(ctx context.Context, s Session, id string) (json.RawMessa
 	return c.object(ctx, "/asset/info", s, url.Values{"did": {id}})
 }
 
-// Month is 0 for a yearly trend, otherwise 1–12.
-func (c *Client) AssetTrend(ctx context.Context, s Session, id string, year, month int) (json.RawMessage, error) {
-	if !ValidID(id, false) || year < 1 || year > 9999 || month < 0 || month > 12 {
-		return nil, fault.Invalid("资产走势需要有效资产 ID、年份及月份")
-	}
-	return c.object(ctx, "/assetline/list", s, url.Values{"did": {id}, "flts": {dateFilter(year, month)}})
+// AssetTrend reads every asset snapshot the way the app does (did=-1, empty
+// filter); callers filter by asset and period locally.
+func (c *Client) AssetTrend(ctx context.Context, s Session) (json.RawMessage, error) {
+	return c.object(ctx, "/assetline/list", s, url.Values{"did": {"-1"}, "flts": {"{}"}})
 }
 
 type Cursor struct {

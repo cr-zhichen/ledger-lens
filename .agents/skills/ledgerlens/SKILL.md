@@ -79,6 +79,7 @@ ledgerlens init --credentials-stdin --non-interactive
 6. 钱迹要求升级报销时，先说明“升级后旧版本将不能继续使用报销”；只有用户明确同意后，才用 `confirm_upgrade:true` 重试。普通报销授权不包含此次升级。
 7. 成功后用返回的 `data.items` 汇报具体结果与 `synced_at`。失败时检查 `error.details.items`，按[写入错误处理](references/commands.md#错误处理)核对；不能把整个批次重新提交，也不能把确认失败当作远端回滚。
 8. 记账需要的标签不存在时，只有用户授权新建标签后才执行 `tags create`；遇到 `TAG_EXISTS` 使用返回的已有 ID。归档标签使用 `tags archive`。字段见[标签写入](references/commands.md#标签写入)。
+9. 用户授权后，用 `assets set-balance` 校准账户余额；只有用户要求记录差额时才设置 `record_diff:true`。用 `budgets set` 设置月度或年度预算，`categories` 只列要变更的分类，`money:0` 表示删除。字段与限制见[资产与预算写入](references/commands.md#资产与预算写入)。预算需要钱迹会员，遇到 `VIP_REQUIRED` 时告知用户，不重试。
 
 ## 遇到错误时
 
@@ -89,4 +90,4 @@ ledgerlens init --credentials-stdin --non-interactive
 - `--fresh` 同步失败时不会返回旧数据；不要将旧缓存的分析描述为已刷新。
 - `sync --full` 用于明确需要的全量重建，不作为常规查询前置步骤。同步失败会保留已有缓存。
 
-`init`、`sync`、登录和退出会更新本地状态；账单与标签写入命令还会修改远端数据。完成操作后保留会话和缓存，只有用户要求退出时才调用 `logout`。不要通过清空数据库、切换账号或更换 API 地址来绕过调用错误。
+`init`、`sync`、登录和退出会更新本地状态；账单、标签、资产余额和预算写入命令还会修改远端数据。完成操作后保留会话和缓存，只有用户要求退出时才调用 `logout`。不要通过清空数据库、切换账号或更换 API 地址来绕过调用错误。

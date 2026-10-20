@@ -51,7 +51,7 @@ func resultIDs(ids ...string) WriteResult {
 	return r
 }
 func mutationError(result WriteResult, err error) (WriteResult, error) {
-	for _, code := range []string{"AUTH_REQUIRED", "TOKEN_EXPIRED", "BUSINESS_ERROR", "SIGNATURE_REJECTED", "REIMBURSEMENT_UPGRADE_REQUIRED", "STATE_CHANGED"} {
+	for _, code := range []string{"AUTH_REQUIRED", "TOKEN_EXPIRED", "BUSINESS_ERROR", "SIGNATURE_REJECTED", "REIMBURSEMENT_UPGRADE_REQUIRED", "STATE_CHANGED", "VIP_REQUIRED"} {
 		if fault.Is(err, code) {
 			return result, err
 		}

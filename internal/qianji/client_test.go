@@ -300,7 +300,7 @@ func TestDirectoryWireContracts(t *testing.T) {
 		{"savings", "/saving/list", url.Values{}, func(c *Client) (any, error) { return c.Savings(ctx, a) }},
 		{"asset_groups", "/asset_group/list", url.Values{}, func(c *Client) (any, error) { return c.AssetGroups(ctx, a) }},
 		{"asset", "/asset/info", url.Values{"did": {"9007199254740993"}}, func(c *Client) (any, error) { return c.Asset(ctx, a, "9007199254740993") }},
-		{"asset_trend", "/assetline/list", url.Values{"did": {"8"}, "flts": {`{"month":"2026,9"}`}}, func(c *Client) (any, error) { return c.AssetTrend(ctx, a, "8", 2026, 9) }},
+		{"asset_trend", "/assetline/list", url.Values{"did": {"-1"}, "flts": {"{}"}}, func(c *Client) (any, error) { return c.AssetTrend(ctx, a) }},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

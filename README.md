@@ -55,7 +55,7 @@
 
 ## 账单管理
 
-普通账单使用 `bills`，转账与信用卡还款使用 `transfers`，退款使用 `refunds`，报销使用 `reimbursements`。输入格式、字段及示例见[账单写入](.agents/skills/ledgerlens/references/commands.md#账单写入)。记账前可用 `tags create` 新建标签，用 `tags archive` 归档标签，见[标签写入](.agents/skills/ledgerlens/references/commands.md#标签写入)。
+普通账单使用 `bills`，转账与信用卡还款使用 `transfers`，退款使用 `refunds`，报销使用 `reimbursements`。输入格式、字段及示例见[账单写入](.agents/skills/ledgerlens/references/commands.md#账单写入)。记账前可用 `tags create` 新建标签，用 `tags archive` 归档标签，见[标签写入](.agents/skills/ledgerlens/references/commands.md#标签写入)。`assets set-balance` 校准账户余额并可记录差额账单，`budgets set` 设置月度或年度预算（需要钱迹会员），见[资产与预算写入](.agents/skills/ledgerlens/references/commands.md#资产与预算写入)。
 
 > 写入命令会直接修改钱迹中的数据，删除无法由本 CLI 撤销。
 

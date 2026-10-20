@@ -146,6 +146,8 @@ var allowedRoutes = map[string]bool{
 	"/assetline/list":        false,
 	"/tag/submittag":         false,
 	"/tag/archivetag":        false,
+	"/asset/submit":          false,
+	"/budget/submitv2":       false,
 }
 
 func (c *Client) post(ctx context.Context, path string, session Session, form url.Values) (json.RawMessage, error) {
@@ -254,6 +256,9 @@ func businessError(path string, code int, raw json.RawMessage) error {
 	}
 	if path == "/account/login" {
 		return authenticationError(path)
+	}
+	if code == 8888 {
+		return fault.New("VIP_REQUIRED", "此功能需要钱迹会员", 2)
 	}
 	for _, marker := range []string{"token", "登录", "login"} {
 		if strings.Contains(hint, marker) {
