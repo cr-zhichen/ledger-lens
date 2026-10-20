@@ -3,7 +3,8 @@
 账镜是面向 AI Agent 的钱迹 CLI，支持账单管理、转账、退款、报销和收支分析。账单与基础资料缓存在本地，支持离线查询，无需部署服务。
 
 - 读取账单、账本、资产、分类、标签和预算等信息。
-- 管理普通收支、转账、信用卡还款、退款和报销。
+- 查询分期、周期记账、存钱计划、资产分组与资产走势。
+- 管理普通收支、转账、信用卡还款、退款、报销和标签。
 - 支持原币和跨币种记账，可填写折算金额或启用自动换算。
 - 支持高级账单筛选、收支统计和预算使用分析。
 - 账务结果输出 JSON，内置 Agent Skill，方便自动调用与汇总。
@@ -42,6 +43,10 @@
 # 查看预算使用情况
 ./bin/ledgerlens budgets get --month 2026-09 --daily
 
+# 查看分期和周期记账
+./bin/ledgerlens installments list
+./bin/ledgerlens recurring list
+
 # 查看本地登录与缓存状态
 ./bin/ledgerlens auth status
 ```
@@ -50,9 +55,9 @@
 
 ## 账单管理
 
-普通账单使用 `bills`，转账与信用卡还款使用 `transfers`，退款使用 `refunds`，报销使用 `reimbursements`。输入格式、字段及示例见[账单写入](.agents/skills/ledgerlens/references/commands.md#账单写入)。
+普通账单使用 `bills`，转账与信用卡还款使用 `transfers`，退款使用 `refunds`，报销使用 `reimbursements`。输入格式、字段及示例见[账单写入](.agents/skills/ledgerlens/references/commands.md#账单写入)。记账前可用 `tags create` 新建标签，用 `tags archive` 归档标签，见[标签写入](.agents/skills/ledgerlens/references/commands.md#标签写入)。
 
-> 写入命令会直接修改钱迹中的账单，删除无法由本 CLI 撤销。
+> 写入命令会直接修改钱迹中的数据，删除无法由本 CLI 撤销。
 
 ## 交给 Agent 使用
 

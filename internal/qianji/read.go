@@ -101,16 +101,97 @@ func (c *Client) Budgets(ctx context.Context, s Session, book string, year, mont
 	if !ValidID(book, true) || year < 1 || year > 9999 || month < 0 || month > 12 {
 		return nil, fault.Invalid("预算需要有效账本、年份及月份")
 	}
+	form := url.Values{"bookid": {book}, "flts": {dateFilter(year, month)}}
+	if periodRange != "" {
+		form.Set("range", periodRange)
+	}
+	return c.list(ctx, "/budget/list", s, form)
+}
+
+// dateFilter is the app's DateFilter encoding shared by budgets and asset trends.
+func dateFilter(year, month int) string {
 	filter := map[string]string{"year": strconv.Itoa(year)}
 	if month > 0 {
 		filter = map[string]string{"month": strconv.Itoa(year) + "," + strconv.Itoa(month)}
 	}
 	encoded, _ := json.Marshal(filter)
-	form := url.Values{"bookid": {book}, "flts": {string(encoded)}}
-	if periodRange != "" {
-		form.Set("range", periodRange)
+	return string(encoded)
+}
+
+func (c *Client) object(ctx context.Context, path string, s Session, form url.Values) (json.RawMessage, error) {
+	data, err := c.post(ctx, path, s, form)
+	if err != nil {
+		return nil, err
 	}
-	return c.list(ctx, "/budget/list", s, form)
+	var object map[string]json.RawMessage
+	if json.Unmarshal(data, &object) != nil || object == nil {
+		return nil, invalidResponse()
+	}
+	return data, nil
+}
+
+// ListPage is one page of a paged directory. Fields keeps every top-level
+// field of the response with its original numeric text.
+type ListPage struct {
+	Fields  map[string]json.RawMessage
+	Items   []json.RawMessage
+	HasMore bool
+}
+
+func (c *Client) page(ctx context.Context, path string, s Session, page int, form url.Values) (ListPage, error) {
+	if page < 0 {
+		return ListPage{}, fault.Invalid("页码必须非负")
+	}
+	form.Set("page", strconv.Itoa(page))
+	data, err := c.object(ctx, path, s, form)
+	if err != nil {
+		return ListPage{}, err
+	}
+	var result ListPage
+	_ = json.Unmarshal(data, &result.Fields)
+	// An empty page may omit the list or send null.
+	if raw := strings.TrimSpace(string(result.Fields["list"])); raw != "" && raw != "null" && json.Unmarshal(result.Fields["list"], &result.Items) != nil {
+		return ListPage{}, invalidResponse()
+	}
+	switch strings.TrimSpace(string(result.Fields["hasmore"])) {
+	case "", "null", "0", "false":
+	case "1", "true":
+		result.HasMore = true
+	default:
+		return ListPage{}, invalidResponse()
+	}
+	return result, nil
+}
+
+func (c *Client) Installments(ctx context.Context, s Session, page int) (ListPage, error) {
+	return c.page(ctx, "/installment/list", s, page, url.Values{})
+}
+
+func (c *Client) RepeatTasks(ctx context.Context, s Session, page int) (ListPage, error) {
+	return c.page(ctx, "/repeat_task/list", s, page, url.Values{})
+}
+
+func (c *Client) Savings(ctx context.Context, s Session) (json.RawMessage, error) {
+	return c.object(ctx, "/saving/list", s, url.Values{})
+}
+
+func (c *Client) AssetGroups(ctx context.Context, s Session) (json.RawMessage, error) {
+	return c.object(ctx, "/asset_group/list", s, url.Values{})
+}
+
+func (c *Client) Asset(ctx context.Context, s Session, id string) (json.RawMessage, error) {
+	if !ValidID(id, false) {
+		return nil, fault.Invalid("资产 ID 必须是正整数")
+	}
+	return c.object(ctx, "/asset/info", s, url.Values{"did": {id}})
+}
+
+// Month is 0 for a yearly trend, otherwise 1–12.
+func (c *Client) AssetTrend(ctx context.Context, s Session, id string, year, month int) (json.RawMessage, error) {
+	if !ValidID(id, false) || year < 1 || year > 9999 || month < 0 || month > 12 {
+		return nil, fault.Invalid("资产走势需要有效资产 ID、年份及月份")
+	}
+	return c.object(ctx, "/assetline/list", s, url.Values{"did": {id}, "flts": {dateFilter(year, month)}})
 }
 
 type Cursor struct {

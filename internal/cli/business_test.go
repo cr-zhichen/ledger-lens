@@ -51,6 +51,7 @@ func TestBusinessCommandsUseOfflineSnapshotAfterLogout(t *testing.T) {
 		"assets:2":         json.RawMessage(`{"list":[]}`),
 		"categories:-1":    json.RawMessage(`{"list":[{"id":2,"parentid":-1,"type":0,"name":"餐饮"},{"id":3,"parentid":-1,"type":1,"name":"工资"}]}`),
 		"budget:-1:2024:4": json.RawMessage(`{"list":[{"flag":1,"money":100}]}`),
+		"installments":     json.RawMessage(`{"list":[{"id":9007199254740995,"name":"手机分期"}],"pages":1}`),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -73,6 +74,7 @@ func TestBusinessCommandsUseOfflineSnapshotAfterLogout(t *testing.T) {
 		{args: []string{"bills", "list", "--filter-stdin"}, input: `{"tag_ids":["food"],"remark_keyword":"COFFEE","currency":"CNY","limit":1}`, want: []string{`"total":1`, `9007199254740993`, `"money":12.34`}},
 		{args: []string{"bills", "stats", "--since", "2024-04-01", "--until", "2024-05-01"}, want: []string{`"total_spend":12.34`, `"total_income":20.00`, `"balance":7.66`}},
 		{args: []string{"budgets", "get", "--month", "2024-04", "--daily"}, want: []string{`"used":12.34`, `"remaining":87.66`, `"date":"2024-04-30"`}},
+		{args: []string{"installments", "list"}, want: []string{`9007199254740995`, `"source":"cache"`}},
 	} {
 		var out, stderr bytes.Buffer
 		args := append([]string{"--db", path}, test.args...)
@@ -109,6 +111,12 @@ func TestBusinessCommandArgumentsRejectBeforeAuthentication(t *testing.T) {
 		{args: []string{"budgets", "get", "--month", "2024-04", "--year", "2024"}},
 		{args: []string{"refunds", "update", "--input-stdin"}, input: `{"id":"1","patch":{"unknown_field":1}}`},
 		{args: []string{"reimbursements", "create", "--input-stdin"}, input: `{"source_ids":["1"],"money":1.001}`},
+		{args: []string{"tags", "create"}},
+		{args: []string{"tags", "create", "--input-stdin"}, input: `{"name":"  "}`},
+		{args: []string{"tags", "create", "--input-stdin"}, input: `{"name":"出差","color":"blue"}`},
+		{args: []string{"tags", "archive", "--input-stdin"}, input: `{"id":"a b"}`},
+		{args: []string{"assets", "get"}},
+		{args: []string{"assets", "trend", "--id", "8"}},
 	} {
 		code, _, stderr := invoke(t, path, test.input, test.args...)
 		if code != 2 || !strings.Contains(stderr, "INVALID_ARGUMENT") {

@@ -138,6 +138,14 @@ var allowedRoutes = map[string]bool{
 	"/baoxiao/baoxiao":       false,
 	"/baoxiao/cancelbaoxiao": false,
 	"/baoxiao/upgradev2":     false,
+	"/installment/list":      false,
+	"/repeat_task/list":      false,
+	"/saving/list":           false,
+	"/asset/info":            false,
+	"/asset_group/list":      false,
+	"/assetline/list":        false,
+	"/tag/submittag":         false,
+	"/tag/archivetag":        false,
 }
 
 func (c *Client) post(ctx context.Context, path string, session Session, form url.Values) (json.RawMessage, error) {

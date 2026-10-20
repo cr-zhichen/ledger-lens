@@ -1,4 +1,4 @@
 interface:
   display_name: "账镜 · LedgerLens"
-  short_description: "查询统计钱迹账单，管理转账退款报销、跨币种金额和预算"
+  short_description: "查询统计钱迹账单与分期，管理转账退款报销、标签、跨币种金额和预算"
   default_prompt: "使用 $ledgerlens 按我的要求查询、统计或管理钱迹账单、转账、退款和报销；优先使用我提供的折算金额，需要自动换算时设置 auto_convert，并遵守我的离线要求和写入授权。"

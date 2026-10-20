@@ -285,3 +285,99 @@ func TestTimeoutAndCanceledRequest(t *testing.T) {
 		t.Fatalf("cancellation: %v", err)
 	}
 }
+
+func TestDirectoryWireContracts(t *testing.T) {
+	a := Session{UID: "1", Token: "fixture-session", Device: "fixture-device"}
+	ctx := context.Background()
+	cases := []struct {
+		name, path string
+		form       url.Values
+		call       func(*Client) (any, error)
+	}{
+		{"installments", "/installment/list", url.Values{"page": {"3"}}, func(c *Client) (any, error) { return c.Installments(ctx, a, 3) }},
+		{"repeat_tasks", "/repeat_task/list", url.Values{"page": {"0"}}, func(c *Client) (any, error) { return c.RepeatTasks(ctx, a, 0) }},
+		{"savings", "/saving/list", url.Values{}, func(c *Client) (any, error) { return c.Savings(ctx, a) }},
+		{"asset_groups", "/asset_group/list", url.Values{}, func(c *Client) (any, error) { return c.AssetGroups(ctx, a) }},
+		{"asset", "/asset/info", url.Values{"did": {"9007199254740993"}}, func(c *Client) (any, error) { return c.Asset(ctx, a, "9007199254740993") }},
+		{"asset_trend", "/assetline/list", url.Values{"did": {"8"}, "flts": {`{"month":"2026,9"}`}}, func(c *Client) (any, error) { return c.AssetTrend(ctx, a, "8", 2026, 9) }},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+				r.ParseForm()
+				tc.form.Set("uid", a.UID)
+				tc.form.Set("fr", a.UID)
+				if r.URL.Path != tc.path || !reflect.DeepEqual(r.PostForm, tc.form) || r.Header.Get("htoken") != "" || r.Header.Get("utoken") != a.Token {
+					t.Errorf("unexpected wire: %s %v", r.URL.Path, r.PostForm)
+				}
+				io.WriteString(w, `{"ec":200,"data":{"list":[{"id":9007199254740993,"money":1234567890.123456789}],"hasmore":1}}`)
+			})
+			value, err := tc.call(client)
+			if err != nil {
+				t.Fatal(err)
+			}
+			raw, _ := json.Marshal(value)
+			if page, ok := value.(ListPage); ok {
+				raw, _ = json.Marshal(page.Items)
+				if !page.HasMore {
+					t.Fatal("hasmore was not read")
+				}
+			}
+			if !strings.Contains(string(raw), "1234567890.123456789") {
+				t.Fatalf("lost numeric precision: %s", raw)
+			}
+		})
+	}
+}
+
+func TestListPageHasMore(t *testing.T) {
+	for _, tc := range []struct {
+		data    string
+		items   int
+		more    bool
+		invalid bool
+	}{
+		{`{"list":[{"id":1}],"hasmore":true}`, 1, true, false},
+		{`{"list":[{"id":1}],"hasmore":0}`, 1, false, false},
+		{`{"list":null}`, 0, false, false},
+		{`{}`, 0, false, false},
+		{`{"list":{}}`, 0, false, true},
+		{`{"list":[],"hasmore":"yes"}`, 0, false, true},
+		{`[]`, 0, false, true},
+	} {
+		client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+			io.WriteString(w, `{"ec":200,"data":`+tc.data+`}`)
+		})
+		page, err := client.Installments(context.Background(), Session{UID: "1", Token: "t", Device: "d"}, 0)
+		if tc.invalid {
+			if !fault.Is(err, "RESPONSE_INVALID") {
+				t.Fatalf("%s accepted: %v", tc.data, err)
+			}
+			continue
+		}
+		if err != nil || len(page.Items) != tc.items || page.HasMore != tc.more {
+			t.Fatalf("%s: %+v %v", tc.data, page, err)
+		}
+	}
+}
+
+func TestSubmitTagWire(t *testing.T) {
+	for _, tc := range []struct {
+		group, color, want string
+	}{
+		{"", "", `{"name":"出差"}`},
+		{"g1", "#529af8", `{"color":"#529af8","groupid":"g1","name":"出差"}`},
+	} {
+		client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+			r.ParseForm()
+			if r.URL.Path != "/tag/submittag" || r.PostForm.Get("v") != tc.want || r.PostForm.Has("did") {
+				t.Errorf("unexpected tag wire: %s %v", r.URL.Path, r.PostForm)
+			}
+			io.WriteString(w, `{"ec":200,"data":{"id":"2610206ad73282cd1f51344","name":"出差","groupid":null,"status":1}}`)
+		})
+		_, id, err := client.SubmitTag(context.Background(), Session{UID: "1", Token: "t", Device: "d"}, "出差", tc.group, tc.color)
+		if err != nil || id != "2610206ad73282cd1f51344" {
+			t.Fatalf("tag id %q: %v", id, err)
+		}
+	}
+}

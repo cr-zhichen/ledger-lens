@@ -228,6 +228,19 @@ ledgerlens reimbursements cancel --input-stdin
 
 发生写入错误时，逐项结果位于 `error.details.items`：`applied` 表示钱迹已接受，`conflict` 表示发生冲突，`unknown` 表示尚无法确认。`confirmed:true` 表示已在同步结果中核对；没有 `synced_at` 表示本次写后同步未成功。先按错误处理表处理，不能根据非零退出码推断远端未改动。
 
+## 标签写入
+
+| 命令 | 输入示例 |
+| --- | --- |
+| `tags create --input-stdin` | `{"name":"出差","group_id":"g1","color":"#529af8"}` |
+| `tags archive --input-stdin` | `{"id":"2610206ad73282cd1f51344"}` |
+
+新建只需 `name`，首尾空白会被去除，不超过 50 个字符。`group_id` 为 `tags list` 返回的标签组 ID，省略时放入默认组；`color` 为 `#RRGGBB`，省略时由钱迹决定。任何状态（含已归档）下已有同名标签时返回 `TAG_EXISTS`，`error.details.id` 为已有标签 ID，直接使用它，不再新建。
+
+归档只接受当前正常状态的标签，已归档或不存在时返回 `TAG_NOT_ACTIVE`；本 CLI 不提供取消归档。归档成功后以 `tags list --status 2` 的结果确认。
+
+成功返回 `data.id`、`status`（`applied`）、`confirmed`（已在标签列表核对）、`tag` 与 `synced_at`，并刷新 `tags list` 缓存。失败时 `error.details` 含 `id` 和 `status`；`WRITE_UNCERTAIN` 与 `WRITE_CONFIRMATION_FAILED` 先用 `tags list` 按名称或 ID 核对，不直接重试。
+
 ## 基础资料
 
 | 命令 | 参数 |
@@ -241,8 +254,14 @@ ledgerlens reimbursements cancel --input-stdin
 | `tags list` | `--status -1\|1\|2` 默认 -1；`--lasttime 0`。 |
 | `budgets list` | `--book ID` 默认 `-1`；`--month YYYY-MM` 与 `--year YYYY` 必须且只能选一项。 |
 | `currencies list` | 无专属参数。 |
+| `assets get` | 必须指定 `--id ID`，返回单个资产账户详情。 |
+| `assets groups` | 资产分组，无专属参数。 |
+| `assets trend` | 必须指定 `--id ID`，`--month YYYY-MM` 与 `--year YYYY` 必须且只能选一项。 |
+| `installments list` | 分期列表，无专属参数；自动读完全部分页。 |
+| `recurring list` | 周期记账任务，无专属参数；自动读完全部分页。 |
+| `savings list` | 存钱计划，无专属参数。 |
 
-这些命令默认联网读取并缓存，可加 `--offline` 完全离线查询；返回 `source` 和 `synced_at`。目录内容保留远端数据结构，读取实际返回字段。账本、成员、分类等列表通常位于 `data.list`；资产可能分组，标签为包含 `tags` 的分组，不要把分组数当作标签数。分类有 `parentid`、`level` 等层级字段。远端 book 默认值 `-1` 是协议哨兵值，不能等同于本地查询的“全部账本”。
+这些命令默认联网读取并缓存，可加 `--offline` 完全离线查询；返回 `source` 和 `synced_at`。`cache refresh` 不刷新资产详情、资产分组、资产走势、分期、周期记账和存钱计划，这些资料需先联网查询一次才能离线读取；钱迹对部分功能有会员限制，读取失败时报告错误码，不推测为没有数据。分页合并后的结果位于 `data.list`，`data.pages` 为读取的页数。上述资料的字段以实际返回为准，含义不明的字段原样报告，不推测金额或期数含义。目录内容保留远端数据结构，读取实际返回字段。账本、成员、分类等列表通常位于 `data.list`；资产可能分组，标签为包含 `tags` 的分组，不要把分组数当作标签数。分类有 `parentid`、`level` 等层级字段。远端 book 默认值 `-1` 是协议哨兵值，不能等同于本地查询的“全部账本”。
 
 ## 直接拉取变更页
 
@@ -294,8 +313,11 @@ ledgerlens reimbursements cancel --input-stdin
 | `REIMBURSEMENT_UPGRADED_BUT_FAILED` | 升级已完成但报销未完成；先同步核对，不重复升级。 |
 | `RELATED_BILLS_EXIST` | 根据消息核对退款、报销关联；关联删除必须已获得覆盖全部记录的授权。 |
 | `WRITE_PARTIAL`、`WRITE_CONFLICT` | 阅读 `error.details.items`，保留成功项目，不重试整个批次；先同步核对其余项目。 |
-| `WRITE_UNCERTAIN` | 请求可能已经生效，先执行 `sync`，按返回的 ID 和原参数逐项核对；不能自动重试新增、修改或删除。 |
-| `WRITE_CONFIRMATION_FAILED` | 钱迹已接受写入，本地确认未完成。只重试 `sync` 并核对结果，不再次写入。 |
+| `WRITE_UNCERTAIN` | 请求可能已经生效，先执行 `sync`（标签写入执行 `tags list`），按返回的 ID 和原参数逐项核对；不能自动重试新增、修改、删除或归档。 |
+| `WRITE_CONFIRMATION_FAILED` | 钱迹已接受写入，本地确认未完成。只重试 `sync` 或 `tags list` 并核对结果，不再次写入。 |
+| `TAG_EXISTS` | 已有同名标签，使用 `error.details.id`，不另建同名标签。 |
+| `TAG_NOT_ACTIVE` | 标签不存在或已归档；用 `tags list` 核对，不重复归档。 |
+| `LIST_LIMIT` | 分页超过 50 页限制，报告结果不完整，不当作完整列表汇总。 |
 | `UPDATE_NOT_FOUND` | 没有可读取的公开正式版 Release，可能尚未发布或仓库不可访问；不能据此声称已是最新版。 |
 | `UPDATE_RATE_LIMITED`、`UPDATE_CHECK_FAILED` | 主动更新检查失败，稍后重试，不重新登录钱迹。自动检查遇到这些错误不影响原命令。 |
 | `UPDATE_INVALID` | GitHub 返回的版本不是有效正式版，报告错误，不建议安装。 |
