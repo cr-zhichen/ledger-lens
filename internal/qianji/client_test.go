@@ -32,13 +32,14 @@ func testClient(t *testing.T, handler http.HandlerFunc) *Client {
 }
 
 func TestReimbursementUpgradeRequiresExplicitSuccess(t *testing.T) {
-	for _, value := range []string{`1`, `0`, `true`, `"1"`, `{"v":1}`, `{}`} {
+	for _, value := range []string{`1`, `{"v":1}`, `0`, `true`, `"1"`, `{"v":0}`, `{"v":"1"}`, `{"v":1,"bills":[]}`, `{}`} {
 		t.Run(value, func(t *testing.T) {
 			client := testClient(t, func(w http.ResponseWriter, r *http.Request) {
 				io.WriteString(w, `{"ec":200,"data":`+value+`}`)
 			})
 			err := client.UpgradeReimbursement(context.Background(), Session{UID: "1", Token: "fixture", Device: "fixture"})
-			if value == "1" && err != nil || value != "1" && !fault.Is(err, "RESPONSE_INVALID") {
+			success := value == `1` || value == `{"v":1}`
+			if success && err != nil || !success && !fault.Is(err, "RESPONSE_INVALID") {
 				t.Fatalf("migration result %s: %v", value, err)
 			}
 		})
