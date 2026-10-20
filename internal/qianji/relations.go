@@ -75,6 +75,11 @@ func (c *Client) UpgradeReimbursement(ctx context.Context, a Session) error {
 	if err != nil {
 		return err
 	}
+	// The app's integer parser unwraps a sole "v" key; the upstream success value is {"v":1}.
+	var wrapped map[string]json.RawMessage
+	if json.Unmarshal(raw, &wrapped) == nil && len(wrapped) == 1 && wrapped["v"] != nil {
+		raw = wrapped["v"]
+	}
 	if string(raw) == "1" {
 		return nil
 	}

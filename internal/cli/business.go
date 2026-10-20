@@ -18,7 +18,7 @@ import (
 
 func writeCommand(command string) bool {
 	switch command {
-	case "bills create", "bills update", "bills delete", "transfers create", "transfers update", "refunds create", "refunds update", "refunds delete", "reimbursements create", "reimbursements delete", "reimbursements cancel":
+	case "bills create", "bills update", "bills delete", "transfers create", "transfers update", "refunds create", "refunds update", "refunds delete", "reimbursements create", "reimbursements delete", "reimbursements cancel", "tags create", "tags archive", "assets set-balance", "budgets set":
 		return true
 	}
 	return false
@@ -76,6 +76,30 @@ func executeBusiness(ctx context.Context, svc *service.Service, command string, 
 			return nil, err
 		}
 		return svc.CancelReimbursements(ctx, input.IDs)
+	case "tags create":
+		var input service.CreateTag
+		if err := readJSON(in, &input); err != nil {
+			return nil, err
+		}
+		return svc.CreateTag(ctx, input)
+	case "tags archive":
+		var input service.ArchiveTag
+		if err := readJSON(in, &input); err != nil {
+			return nil, err
+		}
+		return svc.ArchiveTag(ctx, input)
+	case "assets set-balance":
+		var input service.SetAssetBalance
+		if err := readJSON(in, &input); err != nil {
+			return nil, err
+		}
+		return svc.SetAssetBalance(ctx, input)
+	case "budgets set":
+		var input service.SetBudgets
+		if err := readJSON(in, &input); err != nil {
+			return nil, err
+		}
+		return svc.SetBudgets(ctx, input)
 	}
 	return nil, fault.Invalid("未知账务命令")
 }
@@ -113,6 +137,19 @@ func executeCatalog(ctx context.Context, svc *service.Service, command string, o
 	if (command == "books members" || command == "categories list" || command == "budgets list") && !qianji.ValidID(o.book, true) {
 		return nil, fault.Invalid("请提供有效的账本 ID")
 	}
+	if command == "assets get" && !qianji.ValidID(o.assetID, false) {
+		return nil, fault.Invalid("请提供有效的 --id 资产 ID")
+	}
+	if command == "assets trend" {
+		year, month := 0, 0
+		if o.month != "" || o.year != 0 {
+			var err error
+			if year, month, err = budgetPeriod(o); err != nil {
+				return nil, err
+			}
+		}
+		return svc.AssetTrend(ctx, o.offline, o.assetID, year, month)
+	}
 	if command == "user info" {
 		catalog, err := svc.UserInfo(ctx, o.offline)
 		if err != nil {
@@ -143,16 +180,36 @@ func executeCatalog(ctx context.Context, svc *service.Service, command string, o
 			return c.Categories(ctx, a, o.book, -1)
 		}
 	case "tags list":
+		// The full directory is read and the status filter applied locally.
 		name = "tags"
-		if o.status != -1 || o.lastTime != 0 {
-			name = fmt.Sprintf("tags:%d:%d", o.status, o.lastTime)
+		if o.lastTime != 0 {
+			name = fmt.Sprintf("tags:-1:%d", o.lastTime)
 		}
 		read = func(c *qianji.Client, a qianji.Session) (json.RawMessage, error) {
-			return c.Tags(ctx, a, o.status, o.lastTime)
+			return c.Tags(ctx, a, -1, o.lastTime)
 		}
 	case "currencies list":
 		name = "currencies"
 		read = func(c *qianji.Client, a qianji.Session) (json.RawMessage, error) { return c.Currencies(ctx, a) }
+	case "assets get":
+		name = "asset:" + o.assetID
+		read = func(c *qianji.Client, a qianji.Session) (json.RawMessage, error) { return c.Asset(ctx, a, o.assetID) }
+	case "assets groups":
+		name = "asset_groups"
+		read = func(c *qianji.Client, a qianji.Session) (json.RawMessage, error) { return c.AssetGroups(ctx, a) }
+	case "installments list":
+		name = "installments"
+		read = func(c *qianji.Client, a qianji.Session) (json.RawMessage, error) {
+			return service.AllPages(func(page int) (qianji.ListPage, error) { return c.Installments(ctx, a, page) })
+		}
+	case "recurring list":
+		name = "recurring"
+		read = func(c *qianji.Client, a qianji.Session) (json.RawMessage, error) {
+			return service.AllPages(func(page int) (qianji.ListPage, error) { return c.RepeatTasks(ctx, a, page) })
+		}
+	case "savings list":
+		name = "savings"
+		read = func(c *qianji.Client, a qianji.Session) (json.RawMessage, error) { return c.Savings(ctx, a) }
 	case "budgets list":
 		year, month, err := budgetPeriod(o)
 		if err != nil {
@@ -195,6 +252,23 @@ func executeCatalog(ctx context.Context, svc *service.Service, command string, o
 		}
 		data["list"] = filtered
 	}
+	if command == "tags list" && o.status != -1 {
+		groups, _ := data["list"].([]any)
+		for _, value := range groups {
+			group, ok := value.(map[string]any)
+			if !ok {
+				return nil, fault.New("RESPONSE_INVALID", "资料格式无效，请重新查询", 4)
+			}
+			tags, _ := group["tags"].([]any)
+			kept := []any{}
+			for _, tag := range tags {
+				if item, ok := tag.(map[string]any); ok && fmt.Sprint(item["status"]) == strconv.Itoa(o.status) {
+					kept = append(kept, item)
+				}
+			}
+			group["tags"] = kept
+		}
+	}
 	return data, nil
 }
 
@@ -213,5 +287,9 @@ func budgetPeriod(o options) (int, int, error) {
 }
 
 func catalogCommand(command string) bool {
-	return strings.HasPrefix(command, "books ") || strings.HasPrefix(command, "assets ") || command == "categories list" || command == "tags list" || command == "currencies list" || command == "budgets list" || command == "user info"
+	switch command {
+	case "categories list", "tags list", "currencies list", "budgets list", "user info", "installments list", "recurring list", "savings list":
+		return true
+	}
+	return strings.HasPrefix(command, "books ") || strings.HasPrefix(command, "assets ") && !writeCommand(command)
 }

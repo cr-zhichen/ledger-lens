@@ -20,7 +20,7 @@ func (f *writeFixture) serveRelated(t *testing.T, w http.ResponseWriter, r *http
 	if r.URL.Path == "/baoxiao/upgradev2" {
 		f.upgrades++
 		f.needsUpgrade = false
-		io.WriteString(w, `{"ec":200,"data":1}`)
+		io.WriteString(w, `{"ec":200,"data":{"v":1}}`)
 		return
 	}
 	if r.URL.Path == "/baoxiao/baoxiao" {
@@ -47,7 +47,7 @@ func (f *writeFixture) serveRelated(t *testing.T, w http.ResponseWriter, r *http
 			}
 			extra["bxs"] = map[string]any{}
 		}
-		io.WriteString(w, `{"ec":200,"data":1}`)
+		io.WriteString(w, `{"ec":200,"data":{"v":1}}`)
 		return
 	}
 	payload, err := decodeObject([]byte(f.wire))

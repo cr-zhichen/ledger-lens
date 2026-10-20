@@ -51,13 +51,17 @@ Skill 与提示词：
   budgets get    [--book -1] --month YYYY-MM 或 --year YYYY
                  [--daily] [--fresh|--offline]
 
-账单写入（会修改钱迹中的账单）：
+写入（会修改钱迹中的数据）：
   bills create   --input-stdin             批量新增普通收支或待报销支出
   bills update   --input-stdin             批量修改普通收支或待报销支出
   bills delete   --input-stdin             批量删除账单
   transfers create / update --input-stdin  创建或修改转账、信用卡还款
   refunds create / update / delete --input-stdin
   reimbursements create / delete / cancel --input-stdin
+  tags create    --input-stdin             新建标签，同名标签已存在时拒绝
+  tags archive   --input-stdin             归档一个正常状态的标签
+  assets set-balance --input-stdin         校准资产余额，可记录差额账单
+  budgets set    --input-stdin             设置当期总预算与分类预算
 
 基础资料（可添加 --offline 读取缓存）：
   user info
@@ -65,10 +69,16 @@ Skill 与提示词：
   books members  [--book -1]
   assets list    [--status 0|2] [--name 关键词]
   assets debts   --direction 51|52 [--status 0|1]
+  assets get     --id ID                   单个资产账户详情
+  assets groups                           资产分组
+  assets trend   [--id ID] [--month YYYY-MM 或 --year YYYY]  资产余额快照
   categories list [--book -1] [--type -1|0|1]
   tags list      [--status -1|1|2] [--lasttime 0]
   budgets list   [--book -1] --month YYYY-MM 或 --year YYYY
   currencies list
+  installments list                       分期（自动读完全部分页）
+  recurring list                          周期记账（自动读完全部分页）
+  savings list                            存钱计划
 
 远端变更页：
   bills pull     [--book -1] [--pageoffset 0] [--pagesign SIGN]
@@ -83,6 +93,10 @@ bills pull 仅返回一页变更，不更新缓存。使用 sync 获取完整缓
   create: {"bills":[{"type":0,"money":18.50,"category_id":"123"}]}
   update: {"updates":[{"id":"123","patch":{"exclude_from_budget":false}}]}
   delete: {"deletions":[{"id":"123"}]}
+  tags create: {"name":"出差","group_id":"可选","color":"#529af8"}
+  tags archive: {"id":"标签 ID"}
+  assets set-balance: {"asset_id":"123","balance":-20.5,"record_diff":true}
+  budgets set: {"month":"2026-10","total":3000,"categories":[{"category_id":"1","money":0}]}
 使用 skill show --file references/commands.md 查看完整参数与示例。
 跨币种写入可填写 target_amount、base_amount，或用 auto_convert=true 自动换算。
 --filter-stdin 接收 JSON 筛选条件；不能与其他筛选参数混用。
@@ -111,7 +125,7 @@ type options struct {
 	localContent, force                          bool
 	skillFile, exportDir, output                 string
 	offline, filterStdin, daily                  bool
-	nameKeyword, currency, unit                  string
+	nameKeyword, currency, unit, assetID         string
 }
 
 type credentials struct {
@@ -160,7 +174,7 @@ func parse(args []string) (string, options, bool, error) {
 	o.localContent = command == "skill" || command == "prompt"
 	rest := args[1:]
 	switch command {
-	case "auth", "books", "assets", "categories", "tags", "budgets", "currencies", "bills", "update", "skill", "prompt", "user", "cache", "transfers", "refunds", "reimbursements":
+	case "auth", "books", "assets", "categories", "tags", "budgets", "currencies", "bills", "update", "skill", "prompt", "user", "cache", "transfers", "refunds", "reimbursements", "installments", "recurring", "savings":
 		if len(rest) == 0 || rest[0] == "--help" || rest[0] == "-h" {
 			return "", o, true, nil
 		}
@@ -177,7 +191,7 @@ func parse(args []string) (string, options, bool, error) {
 		fs.BoolVar(&o.credentialsStdin, "credentials-stdin", false, "通过标准输入读取凭据 JSON")
 		fs.BoolVar(&o.nonInteractive, "non-interactive", false, "使用无交互模式")
 		fs.StringVar(&o.baseURL, "api-url", "", "API 根地址")
-	case "auth status", "logout", "currencies list", "version", "update check", "prompt show", "user info", "cache refresh":
+	case "auth status", "logout", "currencies list", "version", "update check", "prompt show", "user info", "cache refresh", "installments list", "recurring list", "savings list", "assets groups":
 	case "skill show":
 		fs.StringVar(&o.skillFile, "file", "SKILL.md", "查看 SKILL.md、references/commands.md 或 agents/openai.yaml")
 	case "skill export":
@@ -188,8 +202,8 @@ func parse(args []string) (string, options, bool, error) {
 		fs.BoolVar(&o.force, "force", false, "覆盖目标文件")
 	case "sync":
 		fs.BoolVar(&o.full, "full", false, "重新全量同步")
-	case "bills create", "bills update", "bills delete", "transfers create", "transfers update", "refunds create", "refunds update", "refunds delete", "reimbursements create", "reimbursements delete", "reimbursements cancel":
-		fs.BoolVar(&o.inputStdin, "input-stdin", false, "从标准输入读取账单 JSON")
+	case "bills create", "bills update", "bills delete", "transfers create", "transfers update", "refunds create", "refunds update", "refunds delete", "reimbursements create", "reimbursements delete", "reimbursements cancel", "tags create", "tags archive", "assets set-balance", "budgets set":
+		fs.BoolVar(&o.inputStdin, "input-stdin", false, "从标准输入读取写入 JSON")
 	case "books list":
 		fs.BoolVar(&o.includeHidden, "include-hidden", false, "包含隐藏账本")
 	case "books members":
@@ -199,6 +213,12 @@ func parse(args []string) (string, options, bool, error) {
 	case "assets debts":
 		fs.IntVar(&o.direction, "direction", 0, "借贷方向")
 		fs.IntVar(&o.status, "status", 0, "借贷状态")
+	case "assets get":
+		fs.StringVar(&o.assetID, "id", "", "资产 ID")
+	case "assets trend":
+		fs.StringVar(&o.assetID, "id", "", "资产 ID")
+		fs.StringVar(&o.month, "month", "", "月份 YYYY-MM")
+		fs.IntVar(&o.year, "year", 0, "年份")
 	case "categories list":
 		fs.StringVar(&o.book, "book", "-1", "账本 ID")
 		fs.IntVar(&o.kind, "type", -1, "分类类型")
@@ -255,7 +275,7 @@ func parse(args []string) (string, options, bool, error) {
 		return "", o, false, fault.Invalid("参数位置或超时设置无效")
 	}
 	if writeCommand(command) && !o.inputStdin {
-		return "", o, false, fault.Invalid("写入账单需要 --input-stdin，请通过标准输入传入 JSON")
+		return "", o, false, fault.Invalid("写入命令需要 --input-stdin，请通过标准输入传入 JSON")
 	}
 	if o.offline {
 		o.noUpdateCheck = true
@@ -381,7 +401,7 @@ func execute(ctx context.Context, command string, o options, in io.Reader) (any,
 	if err != nil {
 		return nil, err
 	}
-	if strings.HasPrefix(command, "transfers ") || strings.HasPrefix(command, "refunds ") || strings.HasPrefix(command, "reimbursements ") {
+	if strings.HasPrefix(command, "transfers ") || strings.HasPrefix(command, "refunds ") || strings.HasPrefix(command, "reimbursements ") || command == "tags create" || command == "tags archive" || command == "assets set-balance" || command == "budgets set" {
 		return executeBusiness(ctx, svc, command, in)
 	}
 	if catalogCommand(command) {

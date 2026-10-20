@@ -228,6 +228,43 @@ ledgerlens reimbursements cancel --input-stdin
 
 发生写入错误时，逐项结果位于 `error.details.items`：`applied` 表示钱迹已接受，`conflict` 表示发生冲突，`unknown` 表示尚无法确认。`confirmed:true` 表示已在同步结果中核对；没有 `synced_at` 表示本次写后同步未成功。先按错误处理表处理，不能根据非零退出码推断远端未改动。
 
+## 标签写入
+
+| 命令 | 输入示例 |
+| --- | --- |
+| `tags create --input-stdin` | `{"name":"出差","group_id":"g1","color":"#529af8"}` |
+| `tags archive --input-stdin` | `{"id":"2610206ad73282cd1f51344"}` |
+
+新建只需 `name`，首尾空白会被去除，不超过 50 个字符。`group_id` 为 `tags list` 返回的标签组 ID，省略时放入默认组；`color` 为 `#RRGGBB`，省略时由钱迹决定。任何状态（含已归档）下已有同名标签时返回 `TAG_EXISTS`，`error.details.id` 为已有标签 ID，直接使用它，不再新建。
+
+归档只接受当前正常状态的标签，已归档或不存在时返回 `TAG_NOT_ACTIVE`；本 CLI 不提供取消归档。归档成功后以 `tags list --status 2` 的结果确认。
+
+成功返回 `data.id`、`status`（`applied`）、`confirmed`（已在标签列表核对）、`tag` 与 `synced_at`，并刷新 `tags list` 缓存。失败时 `error.details` 含 `id` 和 `status`；`WRITE_UNCERTAIN` 与 `WRITE_CONFIRMATION_FAILED` 先用 `tags list` 按名称或 ID 核对，不直接重试。
+
+## 资产与预算写入
+
+| 命令 | 输入示例 |
+| --- | --- |
+| `assets set-balance --input-stdin` | `{"asset_id":"1792508970392","balance":-20.50,"record_diff":true,"category_id":"171588388","remark":"对账"}` |
+| `budgets set --input-stdin` | `{"book_id":"-1","month":"2026-10","total":3000,"categories":[{"category_id":"101","money":500},{"category_id":"102","money":0}]}` |
+
+`assets set-balance` 把账户余额校准为 `balance`（可为负数，最多两位小数）。`asset_id` 来自 `assets list`，包括隐藏账户。余额与当前相同时返回 `INVALID_ARGUMENT`；借贷账户和有分期的信用卡返回 `ASSET_UNSUPPORTED`，请在钱迹中处理。默认只改余额、不记账；`record_diff:true` 时钱迹在默认账本按当前时间记一笔差额账单，余额减少记为支出，增加记为收入。只有记差额账单时才能填写以下字段：
+- `category_id`：须与差额方向一致，减少用支出分类，增加用收入分类，可用 `categories list --type 0|1` 查询。省略时由钱迹选择“其它”分类。
+- `remark`：备注。
+- `exclude_from_income_expense`、`exclude_from_budget`：统计开关。
+
+成功返回 `asset_id`、`previous_balance`、`balance`、`status`、`confirmed`（已重新读取账户核对余额）和完整 `asset`；记差额账单时另含 `diff_bill_id` 与写后同步的 `synced_at`。
+
+`budgets set` 设置一个账本某月（`month`）或某年（`year`）的预算，两者必须且只能选一项；`book_id` 默认 `-1`。
+- `total` 为总预算，必须大于 0。
+- `categories` 只列出要变更的支出分类预算：`money` 为新额度，`0` 表示删除该分类预算；未列出的保持不变。
+
+CLI 先联网读取当期全部预算，合并变更后整体提交，这与钱迹 App 的提交方式一致。总预算不能删除，也不能小于一级分类预算之和（已设预算的父分类下的子分类不重复计入）。仅调整分类预算时，总预算会像 App 一样自动提高到这个和。不能删除当期最后一项预算。
+
+成功返回期间、`confirmed`（已按钱迹返回的当期预算核对）、`total`、全部分类预算 `categories` 及 `synced_at`，并更新 `budgets list` 缓存。预算功能需要钱迹会员，非会员时读取和设置均返回 `VIP_REQUIRED`，不会写入。
+
+两个命令失败时，`error.details` 含已知的部分结果。`WRITE_UNCERTAIN` 与 `WRITE_CONFIRMATION_FAILED` 先用 `assets list` 或 `budgets list` 核对，不直接重试。
+
 ## 基础资料
 
 | 命令 | 参数 |
@@ -238,11 +275,17 @@ ledgerlens reimbursements cancel --input-stdin
 | `assets list` | `--status 0\|2`，默认 0；0 正常，2 隐藏。`--name` 按名称子串筛选。 |
 | `assets debts` | 必须指定 `--direction 51\|52`，`--status 0\|1` 默认 0。方向值的业务含义须有依据再解释。 |
 | `categories list` | `--book ID` 默认 `-1`；`--type -1\|0\|1` 默认 -1，分别为全部、支出、收入分类。 |
-| `tags list` | `--status -1\|1\|2` 默认 -1；`--lasttime 0`。 |
-| `budgets list` | `--book ID` 默认 `-1`；`--month YYYY-MM` 与 `--year YYYY` 必须且只能选一项。 |
+| `tags list` | `--status -1\|1\|2` 默认 -1，1 正常，2 已归档，按每个标签的 `status` 在本地筛选；`--lasttime 0`。 |
+| `budgets list` | `--book ID` 默认 `-1`；`--month YYYY-MM` 与 `--year YYYY` 必须且只能选一项。需要钱迹会员。 |
 | `currencies list` | 无专属参数。 |
+| `assets get` | 必须指定 `--id ID`，返回单个资产账户详情。 |
+| `assets groups` | 资产分组，无专属参数。 |
+| `assets trend` | 资产余额快照（`assetid`、`time` 秒、`value`）。钱迹一次返回全部快照，CLI 在本地筛选：`--id ID` 只看一个账户，`--month YYYY-MM` 或 `--year YYYY` 按北京时间筛选期间，均可省略；筛选期间时另返回 `since`、`until`。 |
+| `installments list` | 分期列表，无专属参数；自动读完全部分页。 |
+| `recurring list` | 周期记账任务，无专属参数；自动读完全部分页。 |
+| `savings list` | 存钱计划，无专属参数。 |
 
-这些命令默认联网读取并缓存，可加 `--offline` 完全离线查询；返回 `source` 和 `synced_at`。目录内容保留远端数据结构，读取实际返回字段。账本、成员、分类等列表通常位于 `data.list`；资产可能分组，标签为包含 `tags` 的分组，不要把分组数当作标签数。分类有 `parentid`、`level` 等层级字段。远端 book 默认值 `-1` 是协议哨兵值，不能等同于本地查询的“全部账本”。
+这些命令默认联网读取并缓存，可加 `--offline` 完全离线查询；返回 `source` 和 `synced_at`。`cache refresh` 不刷新资产详情、资产分组、资产走势、分期、周期记账和存钱计划，这些资料需先联网查询一次才能离线读取；钱迹对部分功能有会员限制，读取失败时报告错误码，不推测为没有数据。分页合并后的结果位于 `data.list`，`data.pages` 为读取的页数。上述资料的字段以实际返回为准，含义不明的字段原样报告，不推测金额或期数含义。目录内容保留远端数据结构，读取实际返回字段。账本、成员、分类等列表通常位于 `data.list`；资产可能分组，标签为包含 `tags` 的分组，不要把分组数当作标签数。分类有 `parentid`、`level` 等层级字段。远端 book 默认值 `-1` 是协议哨兵值，不能等同于本地查询的“全部账本”。
 
 ## 直接拉取变更页
 
@@ -294,8 +337,13 @@ ledgerlens reimbursements cancel --input-stdin
 | `REIMBURSEMENT_UPGRADED_BUT_FAILED` | 升级已完成但报销未完成；先同步核对，不重复升级。 |
 | `RELATED_BILLS_EXIST` | 根据消息核对退款、报销关联；关联删除必须已获得覆盖全部记录的授权。 |
 | `WRITE_PARTIAL`、`WRITE_CONFLICT` | 阅读 `error.details.items`，保留成功项目，不重试整个批次；先同步核对其余项目。 |
-| `WRITE_UNCERTAIN` | 请求可能已经生效，先执行 `sync`，按返回的 ID 和原参数逐项核对；不能自动重试新增、修改或删除。 |
-| `WRITE_CONFIRMATION_FAILED` | 钱迹已接受写入，本地确认未完成。只重试 `sync` 并核对结果，不再次写入。 |
+| `WRITE_UNCERTAIN` | 请求可能已经生效，先执行 `sync`（标签写入执行 `tags list`，余额校准执行 `assets list`，预算执行 `budgets list`），按返回的 ID 和原参数逐项核对；不能自动重试新增、修改、删除、归档、校准或预算提交。 |
+| `WRITE_CONFIRMATION_FAILED` | 钱迹已接受写入，本地确认未完成。只重试对应的读取命令（`sync`、`tags list`、`assets list` 或 `budgets list`）并核对结果，不再次写入。 |
+| `ASSET_UNSUPPORTED` | 借贷账户或有分期的信用卡不能用本 CLI 校准余额，请用户在钱迹中操作。 |
+| `VIP_REQUIRED` | 该功能需要钱迹会员，未写入任何数据；告知用户，不重试。 |
+| `TAG_EXISTS` | 已有同名标签，使用 `error.details.id`，不另建同名标签。 |
+| `TAG_NOT_ACTIVE` | 标签不存在或已归档；用 `tags list` 核对，不重复归档。 |
+| `LIST_LIMIT` | 分页超过 50 页限制，报告结果不完整，不当作完整列表汇总。 |
 | `UPDATE_NOT_FOUND` | 没有可读取的公开正式版 Release，可能尚未发布或仓库不可访问；不能据此声称已是最新版。 |
 | `UPDATE_RATE_LIMITED`、`UPDATE_CHECK_FAILED` | 主动更新检查失败，稍后重试，不重新登录钱迹。自动检查遇到这些错误不影响原命令。 |
 | `UPDATE_INVALID` | GitHub 返回的版本不是有效正式版，报告错误，不建议安装。 |

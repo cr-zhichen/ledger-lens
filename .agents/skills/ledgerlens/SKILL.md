@@ -1,6 +1,6 @@
 ---
 name: ledgerlens
-description: "使用 LedgerLens（账镜）CLI 管理钱迹账单、转账、信用卡还款、退款和报销，处理跨币种金额，筛选账单、统计收支、分析预算及管理离线缓存。适用于查询花销、记账、退款报销、转账还款和预算分析。"
+description: "使用 LedgerLens（账镜）CLI 管理钱迹账单、转账、信用卡还款、退款、报销和标签，处理跨币种金额，筛选账单、统计收支、分析预算，查询分期、周期记账、存钱计划与资产走势，及管理离线缓存。适用于查询花销、记账、退款报销、转账还款、预算分析和资产负债查询。"
 ---
 
 # LedgerLens 调用指南
@@ -65,6 +65,7 @@ ledgerlens init --credentials-stdin --non-interactive
 4. 本位币统计需要账单保存的折算金额；缺少时按原币分别统计或报告缺失，不能将外币金额直接当成本位币。统计不会用当前汇率重算历史账单。
 5. 只有需要完整明细或自行实现用户指定口径时才逐页读取 `data.items`，直到读完 `total`。后续页不要重复 `--fresh`，保留精度并核对 `synced_at` 一致。发现分页变化时重新读取一次；仍不完整就说明限制。
 6. 汇报日期范围、币种、收支或预算结果及缓存同步时间；不把缓存描述成实时数据。分类及账户名从目录读取，不能从账户名推测商户。
+7. 分期、周期记账、存钱计划、资产详情、分组和走势使用 `installments list`、`recurring list`、`savings list`、`assets get`、`assets groups`、`assets trend`，参数见[基础资料](references/commands.md#基础资料)。它们不随 `cache refresh` 刷新；字段按实际返回解释，含义无依据时原样报告。
 
 ## 新增、修改和删除账单
 
@@ -77,6 +78,8 @@ ledgerlens init --credentials-stdin --non-interactive
 5. 金额优先使用用户明确提供的原币、到账和本位币金额；用户需要自动换算时设置 `auto_convert:true`，不要自行猜测汇率。只修改备注等信息时保留历史折算值。
 6. 钱迹要求升级报销时，先说明“升级后旧版本将不能继续使用报销”；只有用户明确同意后，才用 `confirm_upgrade:true` 重试。普通报销授权不包含此次升级。
 7. 成功后用返回的 `data.items` 汇报具体结果与 `synced_at`。失败时检查 `error.details.items`，按[写入错误处理](references/commands.md#错误处理)核对；不能把整个批次重新提交，也不能把确认失败当作远端回滚。
+8. 记账需要的标签不存在时，只有用户授权新建标签后才执行 `tags create`；遇到 `TAG_EXISTS` 使用返回的已有 ID。归档标签使用 `tags archive`。字段见[标签写入](references/commands.md#标签写入)。
+9. 用户授权后，用 `assets set-balance` 校准账户余额；只有用户要求记录差额时才设置 `record_diff:true`。用 `budgets set` 设置月度或年度预算，`categories` 只列要变更的分类，`money:0` 表示删除。字段与限制见[资产与预算写入](references/commands.md#资产与预算写入)。预算需要钱迹会员，遇到 `VIP_REQUIRED` 时告知用户，不重试。
 
 ## 遇到错误时
 
@@ -87,4 +90,4 @@ ledgerlens init --credentials-stdin --non-interactive
 - `--fresh` 同步失败时不会返回旧数据；不要将旧缓存的分析描述为已刷新。
 - `sync --full` 用于明确需要的全量重建，不作为常规查询前置步骤。同步失败会保留已有缓存。
 
-`init`、`sync`、登录和退出会更新本地状态；账单写入命令还会修改远端账单。完成操作后保留会话和缓存，只有用户要求退出时才调用 `logout`。不要通过清空数据库、切换账号或更换 API 地址来绕过调用错误。
+`init`、`sync`、登录和退出会更新本地状态；账单、标签、资产余额和预算写入命令还会修改远端数据。完成操作后保留会话和缓存，只有用户要求退出时才调用 `logout`。不要通过清空数据库、切换账号或更换 API 地址来绕过调用错误。

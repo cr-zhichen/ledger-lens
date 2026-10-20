@@ -385,7 +385,7 @@ func (s *Service) writeBills(ctx context.Context, operation string, changes qian
 	}
 	receipt, err := client.SyncBills(ctx, s.Account.Session, changes)
 	if err != nil {
-		for _, code := range []string{"TOKEN_EXPIRED", "AUTH_REQUIRED", "BUSINESS_ERROR", "SIGNATURE_REJECTED"} {
+		for _, code := range []string{"TOKEN_EXPIRED", "AUTH_REQUIRED", "BUSINESS_ERROR", "SIGNATURE_REJECTED", "VIP_REQUIRED"} {
 			if fault.Is(err, code) {
 				return result, err
 			}
