@@ -230,8 +230,8 @@ func (s *Service) writableBill(ctx context.Context, id string) (map[string]any, 
 	return bill, nil
 }
 
-// Missing optional IDs have the protocol's unset value. Present values still
-// require valid IDs; null, empty strings and malformed values are not defaults.
+// Missing or null optional IDs have the protocol's unset value. Non-null values
+// still require valid IDs; empty strings and malformed values are not defaults.
 func writeBillID(bill map[string]any, field string) (json.Number, error) {
 	value, exists := bill[field]
 	kind := textValue(bill["type"])
@@ -239,7 +239,7 @@ func writeBillID(bill map[string]any, field string) (json.Number, error) {
 	optional := field == "bookid" || field == "assetid" ||
 		field == "cateid" && transfer ||
 		(field == "fromid" || field == "targetid") && !transfer
-	if !exists && optional {
+	if (!exists || value == nil) && optional {
 		return number(-1), nil
 	}
 	id := textValue(value)
